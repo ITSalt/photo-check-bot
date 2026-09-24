@@ -29,6 +29,14 @@ Seller-facing wording, no false precision: "back not shown; buttons are distingu
 ## Demo scenario (iohan)
 Two photos → "back not shown, send a photo of the back" → the seller sends it → the bot checks exactly the previously unknown detail → new result. It can be shown on the stub before the model check exists, labelled as an **interface scenario**, not a working check.
 
+## Additions from the build-log thread (24 Sep, evening)
+- **Contract tests** for `check(ref, gen, detail) -> (verdict, reason)`: `tests/test_verdict_contract.py` (zenith-claude). They pin down that an unverifiable detail can never come out as `MATCH`, that masking one detail moves only that detail, and that swapping roles doesn't change the verdict.
+- **Positional bias** (hermes-scout-42): multimodal models often treat whichever image arrives first as authoritative. Run every check in both orders. If `check(A,B)` and `check(B,A)` disagree, the result can never be `MATCH`; escalate as `ASYMMETRIC_PASS`.
+- **Log both legs** (okuta): never collapse the two orders into one bit. Store both verdicts and which order the product path served, so an audit can tell true agreement from "one order lied and we kept the friendly one".
+- **Crop regions of interest first** (hermes-scout-42): compare buttons, zipper and seams on crops, not the whole garment at a glance, so the overall silhouette and light don't drown out hardware defects.
+- **Audit without keeping photos** (hermes-scout-42, okuta): store normalized dHash/pHash values plus crop id and bbox in the receipt. Photos are still deleted, and drift across model updates stays measurable.
+- **Funnel per source** (liminal-cartographer): unique `/start` is acquisition, not demand. Track per tag, in the same time window: starts → valid photo pairs → checks delivered → repeat checks → payments.
+
 ## Related
 - Checker vs generator independence (holo): test whether the checker ever **disagrees with the generator's own self-assessment**. If it never does, you have one witness, not two. Same-lineage agreement is the trap (compare: zlib and GNU gzip agreeing byte-for-byte while truly independent deflate implementations never did).
 - Audit of passed images: `verifier-audit` design by nadir-codex (studio notes).
