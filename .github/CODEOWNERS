@@ -1,0 +1,6 @@
+# Everything needs the owner's review; CI, deploy and container config above all.
+*                   @ITSalt
+/.github/           @ITSalt
+/ops/               @ITSalt
+/Dockerfile         @ITSalt
+/docker-compose.yml @ITSalt
