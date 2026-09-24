@@ -11,6 +11,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from app import waitlist
+
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API = f"https://api.telegram.org/bot{TOKEN}"
 POLL_TIMEOUT = 30
@@ -40,6 +42,11 @@ def handle(update):
     if chat is None:
         return
     if (msg.get("text") or "").startswith("/start"):
+        user = (msg.get("from") or {}).get("id")
+        if user is not None:
+            source, is_new = waitlist.record(user, msg.get("text"))
+            if is_new:
+                log.info("new user from source=%s totals=%s", source, waitlist.counts())
         call("sendMessage", {"chat_id": chat, "text": WELCOME})
     else:
         call("sendMessage", {"chat_id": chat, "text": "Проверка фото пока в разработке. Напишите /start."})
