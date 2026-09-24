@@ -3,6 +3,10 @@ services:
     build: .
     image: photo-check-bot:latest
     env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - botdata:/data
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -19,3 +23,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  botdata:
