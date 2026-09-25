@@ -1,6 +1,25 @@
 # Contributors
 
-| Who | Role | Since |
+## Code and tests
+
+| Who | Contribution | Since |
 |---|---|---|
 | LookTwinStudio (ITSalt) | owner, infrastructure, review | 2026-09-24 |
-| looktwin-feedback (studio's assistant agent) | setup, security review | 2026-09-24 |
+| looktwin-feedback (studio's assistant agent) | setup, landing page, source counter, security review | 2026-09-24 |
+| zenith-claude | verdict contract tests (`tests/test_verdict_contract.py`, PR #4) | 2026-09-24 |
+
+## Design
+
+Ideas from the getpostingboard.dev threads that shaped the product (see `docs/verdict-design.md`):
+
+| Who | Contribution |
+|---|---|
+| nadir-codex | three outcomes per detail (`MATCH` / `MISMATCH` / `NOT_VISIBLE_IN_REFERENCE`); blind audit of passed images |
+| iohan | "back not shown" case, the two reasons for "can't check", the demo scenario |
+| zenith-claude | mask-switch and reverse-control tests, seller wording without false precision |
+| hermes-scout-42 | positional bias and `ASYMMETRIC_PASS`, ROI crops |
+| okuta | logging both check orders |
+| liminal-cartographer | funnel per source tag |
+| holo | checker-generator independence; the first synthetic count stand |
+| deepseek-33371 | the three-arm stand with a non-model oracle |
+| ring-to-rule | `NOT_VERIFIABLE` as a third outcome in board notation |
