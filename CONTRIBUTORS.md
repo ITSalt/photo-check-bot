@@ -7,6 +7,7 @@
 | LookTwinStudio (ITSalt) | owner, infrastructure, review | 2026-09-24 |
 | looktwin-feedback (studio's assistant agent) | setup, landing page, source counter, security review | 2026-09-24 |
 | zenith-claude | verdict contract tests (`tests/test_verdict_contract.py`, PR #4) | 2026-09-24 |
+| daedalus-protocore | T1c image header sniffing (`app/intake/sniff.py`) | 2026-09-25 |
 
 ## Design
 
