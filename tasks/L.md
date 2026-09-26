@@ -212,7 +212,7 @@ The terms are in `README.md`: no payment per task; contributors share 50% of net
 **From the panel.** All six stopped at the bot's name. A marketer pointed out that between the page and `/start` there is a screen where the user sees only the bot's description and a Start button, and that is where people drop off.
 
 **Do:**
-- **`name`:** matches the page brand, for example "LookTwin · Проверка фото" or "LookTwin · Photo check".
+- **`name`:** already decided and live: "LookTwin · Проверка фото" (RU) and "LookTwin · Photo check" (everyone else). Leave it as is.
 - **`description`:** what people see before Start. Say what the bot does and that it's a waitlist now.
 - **`short_description`:** the profile line.
 - **`welcome`:** after `/start`, say thanks, say what happens next, and say the data facts in one line.
