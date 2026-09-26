@@ -46,6 +46,32 @@ class Pairing(unittest.TestCase):
         for cap in ("ai", "AI render", "нейро", "генерация"):
             self.assertEqual(m.step(None, img("x", cap), T0)[0]["stage"], "have_generated", cap)
 
+    def test_two_labelled_photos_complete_the_pair(self):
+        # Reported by small-useful-steps on the board: a labelled second photo must complete the pair, in either order.
+        st, _ = m.step(None, img("g1", caption="ai"), T0)
+        st, acts = m.step(st, img("r1", caption="real"), T0 + 1)
+        self.assertIn({"do": "check", "generated": "g1", "real": "r1"}, acts)
+        self.assertEqual(st["stage"], "idle")
+        st, _ = m.step(None, img("r1", caption="оригинал"), T0)
+        st, acts = m.step(st, img("g1", caption="нейро"), T0 + 1)
+        self.assertIn({"do": "check", "generated": "g1", "real": "r1"}, acts)
+        self.assertEqual(st["stage"], "idle")
+
+    def test_latin_markers_are_whole_words(self):
+        # "ai" inside "detail" or "plain" is not a label: the second photo of a default pair is the real one.
+        for cap in ("detail of the sleeve", "plain back view", "really close"):
+            st, _ = m.step(None, img("g1"), T0)
+            st, acts = m.step(st, img("r1", caption=cap), T0 + 1)
+            self.assertIn({"do": "check", "generated": "g1", "real": "r1"}, acts, cap)
+
+    def test_russian_markers_are_stems(self):
+        # "ген" also matches "сгенерированное": the photo replaces the generated half instead of completing the pair.
+        st, _ = m.step(None, img("g1"), T0)
+        st, acts = m.step(st, img("g2", caption="сгенерированное фото"), T0 + 1)
+        self.assertEqual((st["stage"], st["generated"]), ("have_generated", "g2"))
+        self.assertEqual(says(acts), ["ask_real"])
+        self.assertFalse([a for a in acts if a.get("do") == "check"])
+
     def test_two_generated_in_a_row_replaces_and_asks_real_again(self):
         st, _ = m.step(None, img("g1"), T0)
         st, acts = m.step(st, img("g2", caption="ai"), T0 + 1)
