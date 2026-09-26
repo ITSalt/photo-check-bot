@@ -1,75 +1,19 @@
-"""Builds the static landing pages (one per language) from one template.
+"""Builds the static landing pages from landing/content/{ru,en}.json and landing/assets/*.svg.
 
-python landing/build.py  ->  landing/ru/index.html, landing/en/index.html, landing/index.html
+python landing/build.py  ->  landing/{ru,en}/index.html, landing/{ru,en}/privacy/index.html, landing/index.html
+
+Texts live in content/*.json and pictures in assets/, so each can be changed
+without touching this template. An empty value means "don't render this block".
+Rules for both are checked by tests/test_landing_content.py.
 """
 import html
+import json
 import pathlib
 
 BOT = "contractsforpeoplebot"
+SITE = "https://itsalt.github.io/photo-check-bot"
 ROOT = pathlib.Path(__file__).parent
-
-T = {
-    "ru": {
-        "title": "Проверка ИИ-фото товара перед публикацией",
-        "desc": "Бот сравнивает сгенерированное фото с настоящей вещью и показывает, что исказилось: принт, цвет, пуговицы, посадка, размер украшения.",
-        "kicker": "Для продавцов на Wildberries, Ozon и других маркетплейсах",
-        "h1": "ИИ-фото товара врёт вежливо. Бот покажет, где",
-        "lead": "Пришлите фото из нейросети и фото настоящей вещи. Бот найдёт, что исказилось, и скажет, как это исправить, до того как покупатель оформит возврат.",
-        "cta": "Проверить бесплатно в Telegram",
-        "cta_note": "Первые проверки бесплатно. Фото удаляются сразу после проверки.",
-        "problem_h": "Генератор не ломает картинку. Он подменяет товар",
-        "problems": [
-            ("Принт стал проще", "Сложный рисунок нейросеть перерисовывает по-своему. На фото красиво, в коробке другое."),
-            ("Цвет «улучшился»", "Золото теплее, ткань ярче. Покупатель видит не тот оттенок, который получит."),
-            ("Пропала деталь", "Пуговица, карман, камень в паве. Нейросеть не считает, она правдоподобно рисует."),
-        ],
-        "how_h": "Как это работает",
-        "steps": [
-            "Откройте бота и отправьте сгенерированное фото товара.",
-            "Отправьте фото настоящей вещи: подойдёт снимок на телефон.",
-            "Получите список расхождений и конкретное задание на исправление.",
-        ],
-        "checks_h": "Что проверяем",
-        "checks": ["посадку и силуэт одежды", "ткань и фактуру", "принт и мелкий рисунок", "цвет относительно оригинала",
-                   "число пуговиц, карманов, камней", "комплектность набора", "размер и пропорции украшений", "парные изделия"],
-        "who_h": "Кто за этим стоит",
-        "who": "LookTwinStudio делает рекламные фото и видео с ИИ для брендов одежды и украшений. Для одного ювелирного бренда наш конвейер выпустил 11 246 фото и видео за 4 месяца, с автоматической проверкой того, что изделие на кадре осталось собой. Бот делает такую проверку доступной каждому продавцу.",
-        "who_link": "Сайт студии",
-        "status": "Бот запускается. Нажмите /start, и мы напишем, как только проверка заработает для всех.",
-        "privacy": "Мы храним только ваш Telegram ID и число проверок. Фото удаляются после обработки.",
-        "lang_other": "English",
-    },
-    "en": {
-        "title": "Check AI product photos before they go live",
-        "desc": "A Telegram bot that compares a generated product photo with the real item and shows what changed: print, colour, buttons, fit, jewelry size.",
-        "kicker": "For marketplace sellers on Amazon, Etsy, Wildberries, Ozon and beyond",
-        "h1": "Your AI product photo lies politely. The bot shows where",
-        "lead": "Send the generated photo and a photo of the real item. The bot finds what changed and tells you how to fix it, before a buyer files a return.",
-        "cta": "Check for free in Telegram",
-        "cta_note": "The first checks are free. Photos are deleted right after the check.",
-        "problem_h": "A generator doesn't break the picture. It swaps the product",
-        "problems": [
-            ("The print got simpler", "Complex patterns get redrawn the model's way. Pretty on screen, different in the box."),
-            ("The colour \"improved\"", "Warmer gold, brighter fabric. The buyer sees a shade they won't receive."),
-            ("A detail went missing", "A button, a pocket, a stone in the pavé. Models don't count; they draw what looks plausible."),
-        ],
-        "how_h": "How it works",
-        "steps": [
-            "Open the bot and send the generated product photo.",
-            "Send a photo of the real item; a phone snapshot is fine.",
-            "Get a list of differences and a concrete fix.",
-        ],
-        "checks_h": "What we check",
-        "checks": ["garment fit and silhouette", "fabric and texture", "prints and fine patterns", "colour against the original",
-                   "count of buttons, pockets, stones", "whether a set is complete", "jewelry size and proportions", "identical pairs"],
-        "who_h": "Who's behind it",
-        "who": "LookTwinStudio makes AI advertising photos and video for clothing and jewelry brands. For one jewelry brand our pipeline produced 11,246 photos and videos in four months, with an automatic check that the piece in each image stayed itself. The bot puts that kind of check in every seller's hands.",
-        "who_link": "Studio website",
-        "status": "The bot is launching. Press /start and we'll message you as soon as checks open for everyone.",
-        "privacy": "We store only your Telegram ID and a count of checks. Photos are deleted after processing.",
-        "lang_other": "Русский",
-    },
-}
+LANGS = ("ru", "en")
 
 CSS = """
 :root{--bg:#FBF8F3;--ink:#1B1B1F;--muted:#5B5B66;--card:#FFFFFF;--line:#E7E1D8;--accent:#D8402B;--accent-ink:#FFFFFF;--soft:#FFF1E8}
@@ -78,81 +22,167 @@ CSS = """
 body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
 .wrap{max-width:880px;margin:0 auto;padding:0 20px}
 header{display:flex;justify-content:space-between;align-items:center;padding:18px 0}
-.brand{font-weight:700;letter-spacing:.2px}.lang{color:var(--muted);text-decoration:none;font-size:15px}
+.brand{font-weight:700;letter-spacing:.2px;color:inherit;text-decoration:none}.lang{color:var(--muted);text-decoration:none;font-size:15px}
 .hero{padding:36px 0 44px}.kicker{color:var(--accent);font-weight:600;font-size:15px;margin:0 0 12px}
 h1{font-size:clamp(30px,6vw,52px);line-height:1.08;margin:0 0 18px;letter-spacing:-.5px}
 .lead{font-size:clamp(17px,2.4vw,20px);color:var(--muted);max-width:640px;margin:0 0 28px}
 .cta{display:inline-block;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:700;padding:16px 26px;border-radius:12px;font-size:18px}
+.cta.secondary{background:transparent;color:var(--accent);border:2px solid var(--accent);padding:10px 18px;font-size:16px}
 .cta:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
-.note{color:var(--muted);font-size:14px;margin-top:12px}
+.note{color:var(--muted);font-size:14px;margin:12px 0 0}
 section{padding:34px 0;border-top:1px solid var(--line)}h2{font-size:clamp(22px,3.6vw,30px);margin:0 0 20px;line-height:1.2}
 .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;color:var(--muted);font-size:15px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0 0 12px;color:var(--muted);font-size:15px}.card p:last-child{margin:0}
 ol.steps{padding-left:22px;margin:0}ol.steps li{margin:0 0 10px}
+h3.group{font-size:17px;margin:18px 0 10px}h3.group:first-child{margin-top:0}
 ul.checks{list-style:none;padding:0;margin:0;display:grid;gap:8px 18px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
 ul.checks li{display:flex;gap:8px}ul.checks li:before{content:"✓";color:var(--accent);font-weight:700;flex:none}
+figure{margin:24px 0 0}figure .pic svg{display:block;width:100%;height:auto}figcaption{color:var(--muted);font-size:14px;margin-top:8px}
 .status{background:var(--soft);border-radius:14px;padding:18px;margin:0 0 18px}
-footer{padding:28px 0 40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}
+footer{padding:28px 0 40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}footer p{margin:0 0 8px}
+.doc h1{font-size:clamp(26px,5vw,40px)}.doc h2{font-size:21px;margin:28px 0 8px}.doc p{margin:0 0 12px}
 a{color:inherit}
 """
 
+SCRIPT = """<script>
+// Pass an ad campaign tag through: ?src=tg_ads_1 turns into /start tg_ads_1 (segment buttons add __<seg>)
+(function(){var s=new URLSearchParams(location.search).get("src");if(!s||!/^[A-Za-z0-9_]{1,30}$/.test(s))return;
+document.querySelectorAll("a.cta").forEach(function(a){var g=a.getAttribute("data-seg");a.href="https://t.me/%s?start="+s+(g?"__"+g:"")});})();
+</script>""" % BOT
 
-def page(lang, other):
-    t = T[lang]
+
+def load(lang):
+    return json.loads((ROOT / "content" / f"{lang}.json").read_text(encoding="utf-8"))
+
+
+def asset(name):
+    """Inline an SVG from assets/ (safety rules are enforced by the tests)."""
+    svg = (ROOT / name).read_text(encoding="utf-8").strip()
+    if svg.startswith("<?xml"):
+        svg = svg[svg.index("?>") + 2:].strip()
+    return svg
+
+
+def figure(block):
+    if not block.get("asset"):
+        return ""
     e = html.escape
-    bot_link = f"https://t.me/{BOT}?start=landing_{lang}"
-    problems = "".join(f'<div class="card"><h3>{e(h)}</h3><p>{e(p)}</p></div>' for h, p in t["problems"])
-    steps = "".join(f"<li>{e(s)}</li>" for s in t["steps"])
-    checks = "".join(f"<li>{e(c)}</li>" for c in t["checks"])
+    cap = f"<figcaption>{e(block['caption'])}</figcaption>" if block.get("caption") else ""
+    return f'<figure><div class="pic" role="img" aria-label="{e(block["alt"])}">{asset(block["asset"])}</div>{cap}</figure>'
+
+
+def head(c, lang, other, path, title):
+    e = html.escape
+    m = c["meta"]
+    og = ""
+    if m.get("og_image"):
+        og = (f'<meta property="og:image" content="{SITE}/{m["og_image"]}">\n'
+              '<meta property="og:image:width" content="1200">\n<meta property="og:image:height" content="630">\n'
+              '<meta name="twitter:card" content="summary_large_image">\n')
     return f"""<!doctype html>
 <html lang="{lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{e(t["title"])}</title>
-<meta name="description" content="{e(t["desc"])}">
-<meta property="og:title" content="{e(t["title"])}">
-<meta property="og:description" content="{e(t["desc"])}">
+<title>{e(title)}</title>
+<meta name="description" content="{e(m["desc"])}">
+<meta property="og:title" content="{e(title)}">
+<meta property="og:description" content="{e(m["desc"])}">
 <meta property="og:type" content="website">
-<link rel="alternate" hreflang="{other}" href="../{other}/">
+<meta property="og:url" content="{SITE}/{lang}/{path}">
+{og}<link rel="alternate" hreflang="{lang}" href="{SITE}/{lang}/{path}">
+<link rel="alternate" hreflang="{other}" href="{SITE}/{other}/{path}">
 <style>{CSS}</style>
 </head>
 <body>
 <div class="wrap">
-<header><span class="brand">LookTwinStudio · Photo check</span><a class="lang" href="../{other}/">{e(t["lang_other"])}</a></header>
-<div class="hero">
-<p class="kicker">{e(t["kicker"])}</p>
-<h1>{e(t["h1"])}</h1>
-<p class="lead">{e(t["lead"])}</p>
-<a class="cta" href="{bot_link}" data-src="landing_{lang}">{e(t["cta"])}</a>
-<p class="note">{e(t["cta_note"])}</p>
-</div>
-<section><h2>{e(t["problem_h"])}</h2><div class="grid">{problems}</div></section>
-<section><h2>{e(t["how_h"])}</h2><ol class="steps">{steps}</ol></section>
-<section><h2>{e(t["checks_h"])}</h2><ul class="checks">{checks}</ul></section>
-<section><h2>{e(t["who_h"])}</h2><p>{e(t["who"])}</p><p><a href="https://looktwinstudio.ru/">{e(t["who_link"])}</a></p></section>
-<section><p class="status">{e(t["status"])}</p><a class="cta" href="{bot_link}">{e(t["cta"])}</a></section>
-<footer>{e(t["privacy"])}</footer>
-</div>
-<script>
-// Pass an ad campaign tag through: ?src=tg_ads_1 turns into /start tg_ads_1
-(function(){{var s=new URLSearchParams(location.search).get("src");if(!s||!/^[A-Za-z0-9_]{{1,40}}$/.test(s))return;
-document.querySelectorAll("a.cta").forEach(function(a){{a.href="https://t.me/{BOT}?start="+s}});}})();
-</script>
-</body>
-</html>
+<header><a class="brand" href="{SITE}/{lang}/">{e(c["header"]["brand"])}</a><a class="lang" href="../{"../" if path else ""}{other}/{path}">{e(c["header"]["lang_other"])}</a></header>
 """
 
 
-for lang, other in (("ru", "en"), ("en", "ru")):
-    out = ROOT / lang / "index.html"
-    out.parent.mkdir(exist_ok=True)
-    out.write_text(page(lang, other), encoding="utf-8")
+def footer(c, lang, on_privacy_page=False):
+    e = html.escape
+    p = c["privacy"]
+    link = ""
+    if p.get("page_link") and c["privacy_page"]["sections"] and not on_privacy_page:
+        link = f'<p><a href="{SITE}/{lang}/privacy/">{e(p["page_link"])}</a></p>'
+    return f"<footer><p>{e(p['block'])}</p>{link}</footer>\n</div>\n"
 
-(ROOT / "index.html").write_text("""<!doctype html><html><head><meta charset="utf-8">
+
+def page(lang, other):
+    c = load(lang)
+    e = html.escape
+    h = c["hero"]
+    start = f"landing_{lang}"
+
+    def cta(text, cls="cta", seg=""):
+        payload = f"{start}__{seg}" if seg else start
+        data = f' data-seg="{e(seg)}"' if seg else ""
+        return f'<a class="{cls}" href="https://t.me/{BOT}?start={payload}"{data}>{e(text)}</a>'
+
+    price = f'<p class="note">{e(h["price_note"])}</p>' if h.get("price_note") else ""
+    problems = "".join(f'<div class="card"><h3>{e(i["title"])}</h3><p>{e(i["text"])}</p></div>' for i in c["problems"]["items"])
+    steps = "".join(f"<li>{e(s)}</li>" for s in c["how"]["steps"])
+    groups = ""
+    for g in c["checks"]["groups"]:
+        title = f'<h3 class="group">{e(g["title"])}</h3>' if g.get("title") else ""
+        groups += title + '<ul class="checks">' + "".join(f"<li>{e(i)}</li>" for i in g["items"]) + "</ul>"
+    checks_note = f'<p class="note">{e(c["checks"]["note"])}</p>' if c["checks"].get("note") else ""
+    segments = ""
+    if c["segments"]["items"]:
+        cards = "".join(
+            f'<div class="card"><h3>{e(s["title"])}</h3><p>{e(s["text"])}</p><p>{cta(s["cta"], "cta secondary", s["seg"])}</p></div>'
+            for s in c["segments"]["items"])
+        segments = f'<section><h2>{e(c["segments"]["h"])}</h2><div class="grid">{cards}</div></section>'
+    why = f'<p class="note">{e(c["why_telegram"])}</p>' if c.get("why_telegram") else ""
+    w = c["who"]
+    return head(c, lang, other, "", c["meta"]["title"]) + f"""<div class="hero">
+<p class="kicker">{e(h["kicker"])}</p>
+<h1>{e(h["h1"])}</h1>
+<p class="lead">{e(h["lead"])}</p>
+{cta(h["cta"])}
+<p class="note">{e(h["cta_note"])}</p>{price}{why}
+{figure(c["illustration"])}
+</div>
+<section><h2>{e(c["problems"]["h"])}</h2><div class="grid">{problems}</div></section>
+<section><h2>{e(c["how"]["h"])}</h2><ol class="steps">{steps}</ol>{figure(c["how"]["mockup"])}</section>
+<section><h2>{e(c["checks"]["h"])}</h2>{groups}{checks_note}</section>
+{segments}
+<section><h2>{e(w["h"])}</h2><p>{e(w["text"])}</p><p><a href="{e(w["link_url"])}">{e(w["link_text"])}</a></p></section>
+<section><p class="status">{e(c["status"]["text"])}</p>{cta(c["status"]["cta"])}</section>
+""" + footer(c, lang) + SCRIPT + "\n</body>\n</html>\n"
+
+
+def privacy_page(lang, other):
+    c = load(lang)
+    e = html.escape
+    pp = c["privacy_page"]
+    body = "".join(f"<h2>{e(s['h'])}</h2><p>{e(s['p'])}</p>" for s in pp["sections"])
+    return (head(c, lang, other, "privacy/", pp["title"])
+            + f'<div class="doc"><h1>{e(pp["title"])}</h1>{body}</div>\n'
+            + footer(c, lang, on_privacy_page=True) + "</body>\n</html>\n")
+
+
+def build():
+    built = []
+    for lang, other in (("ru", "en"), ("en", "ru")):
+        out = ROOT / lang / "index.html"
+        out.parent.mkdir(exist_ok=True)
+        out.write_text(page(lang, other), encoding="utf-8", newline="\n")
+        built.append(out)
+        if load(lang)["privacy_page"]["sections"]:
+            out = ROOT / lang / "privacy" / "index.html"
+            out.parent.mkdir(exist_ok=True)
+            out.write_text(privacy_page(lang, other), encoding="utf-8", newline="\n")
+            built.append(out)
+    (ROOT / "index.html").write_text("""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Photo check</title>
 <script>var q=location.search;location.replace((/^ru\\b/i.test(navigator.language||"")?"ru/":"en/")+q);</script>
 <noscript><meta http-equiv="refresh" content="0; url=ru/"></noscript></head>
 <body><a href="ru/">Русский</a> · <a href="en/">English</a></body></html>
-""", encoding="utf-8")
-print("built:", [str(p.relative_to(ROOT)) for p in sorted(ROOT.rglob("index.html"))])
+""", encoding="utf-8", newline="\n")
+    return built
+
+
+if __name__ == "__main__":
+    print("built:", [str(p.relative_to(ROOT)) for p in build()])

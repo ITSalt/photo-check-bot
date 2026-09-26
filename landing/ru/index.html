@@ -8,7 +8,9 @@
 <meta property="og:title" content="Проверка ИИ-фото товара перед публикацией">
 <meta property="og:description" content="Бот сравнивает сгенерированное фото с настоящей вещью и показывает, что исказилось: принт, цвет, пуговицы, посадка, размер украшения.">
 <meta property="og:type" content="website">
-<link rel="alternate" hreflang="en" href="../en/">
+<meta property="og:url" content="https://itsalt.github.io/photo-check-bot/ru/">
+<link rel="alternate" hreflang="ru" href="https://itsalt.github.io/photo-check-bot/ru/">
+<link rel="alternate" hreflang="en" href="https://itsalt.github.io/photo-check-bot/en/">
 <style>
 :root{--bg:#FBF8F3;--ink:#1B1B1F;--muted:#5B5B66;--card:#FFFFFF;--line:#E7E1D8;--accent:#D8402B;--accent-ink:#FFFFFF;--soft:#FFF1E8}
 @media (prefers-color-scheme:dark){:root{--bg:#141417;--ink:#F2F0EC;--muted:#A9A7B0;--card:#1E1E23;--line:#2E2E35;--accent:#FF6A4F;--accent-ink:#141417;--soft:#2A1F1B}}
@@ -16,45 +18,51 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
 .wrap{max-width:880px;margin:0 auto;padding:0 20px}
 header{display:flex;justify-content:space-between;align-items:center;padding:18px 0}
-.brand{font-weight:700;letter-spacing:.2px}.lang{color:var(--muted);text-decoration:none;font-size:15px}
+.brand{font-weight:700;letter-spacing:.2px;color:inherit;text-decoration:none}.lang{color:var(--muted);text-decoration:none;font-size:15px}
 .hero{padding:36px 0 44px}.kicker{color:var(--accent);font-weight:600;font-size:15px;margin:0 0 12px}
 h1{font-size:clamp(30px,6vw,52px);line-height:1.08;margin:0 0 18px;letter-spacing:-.5px}
 .lead{font-size:clamp(17px,2.4vw,20px);color:var(--muted);max-width:640px;margin:0 0 28px}
 .cta{display:inline-block;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:700;padding:16px 26px;border-radius:12px;font-size:18px}
+.cta.secondary{background:transparent;color:var(--accent);border:2px solid var(--accent);padding:10px 18px;font-size:16px}
 .cta:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
-.note{color:var(--muted);font-size:14px;margin-top:12px}
+.note{color:var(--muted);font-size:14px;margin:12px 0 0}
 section{padding:34px 0;border-top:1px solid var(--line)}h2{font-size:clamp(22px,3.6vw,30px);margin:0 0 20px;line-height:1.2}
 .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;color:var(--muted);font-size:15px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0 0 12px;color:var(--muted);font-size:15px}.card p:last-child{margin:0}
 ol.steps{padding-left:22px;margin:0}ol.steps li{margin:0 0 10px}
+h3.group{font-size:17px;margin:18px 0 10px}h3.group:first-child{margin-top:0}
 ul.checks{list-style:none;padding:0;margin:0;display:grid;gap:8px 18px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
 ul.checks li{display:flex;gap:8px}ul.checks li:before{content:"✓";color:var(--accent);font-weight:700;flex:none}
+figure{margin:24px 0 0}figure .pic svg{display:block;width:100%;height:auto}figcaption{color:var(--muted);font-size:14px;margin-top:8px}
 .status{background:var(--soft);border-radius:14px;padding:18px;margin:0 0 18px}
-footer{padding:28px 0 40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}
+footer{padding:28px 0 40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}footer p{margin:0 0 8px}
+.doc h1{font-size:clamp(26px,5vw,40px)}.doc h2{font-size:21px;margin:28px 0 8px}.doc p{margin:0 0 12px}
 a{color:inherit}
 </style>
 </head>
 <body>
 <div class="wrap">
-<header><span class="brand">LookTwinStudio · Photo check</span><a class="lang" href="../en/">English</a></header>
+<header><a class="brand" href="https://itsalt.github.io/photo-check-bot/ru/">LookTwinStudio · Photo check</a><a class="lang" href="../en/">English</a></header>
 <div class="hero">
 <p class="kicker">Для продавцов на Wildberries, Ozon и других маркетплейсах</p>
 <h1>ИИ-фото товара врёт вежливо. Бот покажет, где</h1>
 <p class="lead">Пришлите фото из нейросети и фото настоящей вещи. Бот найдёт, что исказилось, и скажет, как это исправить, до того как покупатель оформит возврат.</p>
-<a class="cta" href="https://t.me/contractsforpeoplebot?start=landing_ru" data-src="landing_ru">Проверить бесплатно в Telegram</a>
+<a class="cta" href="https://t.me/contractsforpeoplebot?start=landing_ru">Проверить бесплатно в Telegram</a>
 <p class="note">Первые проверки бесплатно. Фото удаляются сразу после проверки.</p>
+
 </div>
 <section><h2>Генератор не ломает картинку. Он подменяет товар</h2><div class="grid"><div class="card"><h3>Принт стал проще</h3><p>Сложный рисунок нейросеть перерисовывает по-своему. На фото красиво, в коробке другое.</p></div><div class="card"><h3>Цвет «улучшился»</h3><p>Золото теплее, ткань ярче. Покупатель видит не тот оттенок, который получит.</p></div><div class="card"><h3>Пропала деталь</h3><p>Пуговица, карман, камень в паве. Нейросеть не считает, она правдоподобно рисует.</p></div></div></section>
 <section><h2>Как это работает</h2><ol class="steps"><li>Откройте бота и отправьте сгенерированное фото товара.</li><li>Отправьте фото настоящей вещи: подойдёт снимок на телефон.</li><li>Получите список расхождений и конкретное задание на исправление.</li></ol></section>
 <section><h2>Что проверяем</h2><ul class="checks"><li>посадку и силуэт одежды</li><li>ткань и фактуру</li><li>принт и мелкий рисунок</li><li>цвет относительно оригинала</li><li>число пуговиц, карманов, камней</li><li>комплектность набора</li><li>размер и пропорции украшений</li><li>парные изделия</li></ul></section>
+
 <section><h2>Кто за этим стоит</h2><p>LookTwinStudio делает рекламные фото и видео с ИИ для брендов одежды и украшений. Для одного ювелирного бренда наш конвейер выпустил 11 246 фото и видео за 4 месяца, с автоматической проверкой того, что изделие на кадре осталось собой. Бот делает такую проверку доступной каждому продавцу.</p><p><a href="https://looktwinstudio.ru/">Сайт студии</a></p></section>
 <section><p class="status">Бот запускается. Нажмите /start, и мы напишем, как только проверка заработает для всех.</p><a class="cta" href="https://t.me/contractsforpeoplebot?start=landing_ru">Проверить бесплатно в Telegram</a></section>
-<footer>Мы храним только ваш Telegram ID и число проверок. Фото удаляются после обработки.</footer>
+<footer><p>Мы храним только ваш Telegram ID и число проверок. Фото удаляются после обработки.</p></footer>
 </div>
 <script>
-// Pass an ad campaign tag through: ?src=tg_ads_1 turns into /start tg_ads_1
-(function(){var s=new URLSearchParams(location.search).get("src");if(!s||!/^[A-Za-z0-9_]{1,40}$/.test(s))return;
-document.querySelectorAll("a.cta").forEach(function(a){a.href="https://t.me/contractsforpeoplebot?start="+s});})();
+// Pass an ad campaign tag through: ?src=tg_ads_1 turns into /start tg_ads_1 (segment buttons add __<seg>)
+(function(){var s=new URLSearchParams(location.search).get("src");if(!s||!/^[A-Za-z0-9_]{1,30}$/.test(s))return;
+document.querySelectorAll("a.cta").forEach(function(a){var g=a.getAttribute("data-seg");a.href="https://t.me/contractsforpeoplebot?start="+s+(g?"__"+g:"")});})();
 </script>
 </body>
 </html>
