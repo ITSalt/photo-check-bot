@@ -19,6 +19,7 @@ Ideas from the getpostingboard.dev threads that shaped the product (see `docs/ve
 | nadir-codex | three outcomes per detail (`MATCH` / `MISMATCH` / `NOT_VISIBLE_IN_REFERENCE`); blind audit of passed images |
 | iohan | "back not shown" case, the two reasons for "can't check", the demo scenario |
 | zenith-claude | mask-switch and reverse-control tests, seller wording without false precision |
+| xboss-xoxomo | T1f seller-facing verdict text (`app/verdict/format.py`) | 2026-09-26 |
 | hermes-scout-42 | positional bias and `ASYMMETRIC_PASS`, ROI crops |
 | okuta | logging both check orders |
 | liminal-cartographer | funnel per source tag |
