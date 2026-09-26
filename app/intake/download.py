@@ -50,11 +50,20 @@ def download(get_file, fetch, file_id, dest_dir, max_bytes):
         raise TooLarge(
             "declared size %d exceeds the limit %d" % (declared, max_bytes))
 
-    path = _new_path(dest_dir)
     written = 0
-    handle = open(path, "wb")
+    while True:
+        path = _new_path(dest_dir)
+        try:
+            # O_EXCL closes both gaps at once: the file exists with 0o600 already
+            # applied (nothing is ever readable by group or others), and a name
+            # taken between the check and this call is refused rather than reused.
+            # On Windows the mode bits are ignored and O_EXCL still refuses.
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        break
+    handle = os.fdopen(fd, "wb")
     try:
-        os.chmod(path, 0o600)  # POSIX bits; on Windows this only clears the read-only flag
         for chunk in fetch(info.get("file_path")):
             if not chunk:
                 continue
