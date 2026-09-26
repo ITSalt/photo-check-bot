@@ -6,23 +6,20 @@ intake (paired photos) and checking logic come in through pull requests.
 import json
 import logging
 import os
+import pathlib
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from app import waitlist
+from app import lang, waitlist
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API = f"https://api.telegram.org/bot{TOKEN}"
 POLL_TIMEOUT = 30
 
-WELCOME = (
-    "Привет! Я проверяю ИИ-фото товара перед публикацией на маркетплейсе.\n"
-    "Скоро здесь можно будет прислать сгенерированное фото и фото настоящей вещи, "
-    "а я скажу, что исказилось и как это исправить.\n\n"
-    "Присланные фото удаляются сразу после проверки."
-)
+# Bot replies and profile texts, RU and EN (rules: tests/test_bot_texts.py).
+TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(encoding="utf-8"))
 
 log = logging.getLogger("bot")
 
@@ -36,20 +33,31 @@ def call(method, params=None, timeout=POLL_TIMEOUT + 10):
     return body["result"]
 
 
+def reply_lang(msg):
+    if not lang.IMPLEMENTED:  # task L10; Russian until it lands
+        return "ru"
+    try:
+        return lang.pick_lang(msg.get("text"), (msg.get("from") or {}).get("language_code"))
+    except Exception:  # a language pick must never take the bot down
+        log.exception("pick_lang failed")
+        return "ru"
+
+
 def handle(update):
     msg = update.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
     if chat is None:
         return
+    texts = TEXTS.get(reply_lang(msg), TEXTS["ru"])
     if (msg.get("text") or "").startswith("/start"):
         user = (msg.get("from") or {}).get("id")
         if user is not None:
             source, is_new = waitlist.record(user, msg.get("text"))
             if is_new:
                 log.info("new user from source=%s totals=%s", source, waitlist.counts())
-        call("sendMessage", {"chat_id": chat, "text": WELCOME})
+        call("sendMessage", {"chat_id": chat, "text": texts["welcome"]})
     else:
-        call("sendMessage", {"chat_id": chat, "text": "Проверка фото пока в разработке. Напишите /start."})
+        call("sendMessage", {"chat_id": chat, "text": texts["fallback"]})
 
 
 def main():

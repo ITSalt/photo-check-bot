@@ -8,7 +8,9 @@
 <meta property="og:title" content="Check AI product photos before they go live">
 <meta property="og:description" content="A Telegram bot that compares a generated product photo with the real item and shows what changed: print, colour, buttons, fit, jewelry size.">
 <meta property="og:type" content="website">
-<link rel="alternate" hreflang="ru" href="../ru/">
+<meta property="og:url" content="https://itsalt.github.io/photo-check-bot/en/">
+<link rel="alternate" hreflang="en" href="https://itsalt.github.io/photo-check-bot/en/">
+<link rel="alternate" hreflang="ru" href="https://itsalt.github.io/photo-check-bot/ru/">
 <style>
 :root{--bg:#FBF8F3;--ink:#1B1B1F;--muted:#5B5B66;--card:#FFFFFF;--line:#E7E1D8;--accent:#D8402B;--accent-ink:#FFFFFF;--soft:#FFF1E8}
 @media (prefers-color-scheme:dark){:root{--bg:#141417;--ink:#F2F0EC;--muted:#A9A7B0;--card:#1E1E23;--line:#2E2E35;--accent:#FF6A4F;--accent-ink:#141417;--soft:#2A1F1B}}
@@ -16,45 +18,51 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
 .wrap{max-width:880px;margin:0 auto;padding:0 20px}
 header{display:flex;justify-content:space-between;align-items:center;padding:18px 0}
-.brand{font-weight:700;letter-spacing:.2px}.lang{color:var(--muted);text-decoration:none;font-size:15px}
+.brand{font-weight:700;letter-spacing:.2px;color:inherit;text-decoration:none}.lang{color:var(--muted);text-decoration:none;font-size:15px}
 .hero{padding:36px 0 44px}.kicker{color:var(--accent);font-weight:600;font-size:15px;margin:0 0 12px}
 h1{font-size:clamp(30px,6vw,52px);line-height:1.08;margin:0 0 18px;letter-spacing:-.5px}
 .lead{font-size:clamp(17px,2.4vw,20px);color:var(--muted);max-width:640px;margin:0 0 28px}
 .cta{display:inline-block;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:700;padding:16px 26px;border-radius:12px;font-size:18px}
+.cta.secondary{background:transparent;color:var(--accent);border:2px solid var(--accent);padding:10px 18px;font-size:16px}
 .cta:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
-.note{color:var(--muted);font-size:14px;margin-top:12px}
+.note{color:var(--muted);font-size:14px;margin:12px 0 0}
 section{padding:34px 0;border-top:1px solid var(--line)}h2{font-size:clamp(22px,3.6vw,30px);margin:0 0 20px;line-height:1.2}
 .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;color:var(--muted);font-size:15px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0 0 12px;color:var(--muted);font-size:15px}.card p:last-child{margin:0}
 ol.steps{padding-left:22px;margin:0}ol.steps li{margin:0 0 10px}
+h3.group{font-size:17px;margin:18px 0 10px}h3.group:first-child{margin-top:0}
 ul.checks{list-style:none;padding:0;margin:0;display:grid;gap:8px 18px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
 ul.checks li{display:flex;gap:8px}ul.checks li:before{content:"✓";color:var(--accent);font-weight:700;flex:none}
+figure{margin:24px 0 0}figure .pic svg{display:block;width:100%;height:auto}figcaption{color:var(--muted);font-size:14px;margin-top:8px}
 .status{background:var(--soft);border-radius:14px;padding:18px;margin:0 0 18px}
-footer{padding:28px 0 40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}
+footer{padding:28px 0 40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}footer p{margin:0 0 8px}
+.doc h1{font-size:clamp(26px,5vw,40px)}.doc h2{font-size:21px;margin:28px 0 8px}.doc p{margin:0 0 12px}
 a{color:inherit}
 </style>
 </head>
 <body>
 <div class="wrap">
-<header><span class="brand">LookTwinStudio · Photo check</span><a class="lang" href="../ru/">Русский</a></header>
+<header><a class="brand" href="https://itsalt.github.io/photo-check-bot/en/">LookTwinStudio · Photo check</a><a class="lang" href="../ru/">Русский</a></header>
 <div class="hero">
 <p class="kicker">For marketplace sellers on Amazon, Etsy, Wildberries, Ozon and beyond</p>
 <h1>Your AI product photo lies politely. The bot shows where</h1>
 <p class="lead">Send the generated photo and a photo of the real item. The bot finds what changed and tells you how to fix it, before a buyer files a return.</p>
-<a class="cta" href="https://t.me/contractsforpeoplebot?start=landing_en" data-src="landing_en">Check for free in Telegram</a>
+<a class="cta" href="https://t.me/contractsforpeoplebot?start=landing_en">Check for free in Telegram</a>
 <p class="note">The first checks are free. Photos are deleted right after the check.</p>
+
 </div>
 <section><h2>A generator doesn&#x27;t break the picture. It swaps the product</h2><div class="grid"><div class="card"><h3>The print got simpler</h3><p>Complex patterns get redrawn the model&#x27;s way. Pretty on screen, different in the box.</p></div><div class="card"><h3>The colour &quot;improved&quot;</h3><p>Warmer gold, brighter fabric. The buyer sees a shade they won&#x27;t receive.</p></div><div class="card"><h3>A detail went missing</h3><p>A button, a pocket, a stone in the pavé. Models don&#x27;t count; they draw what looks plausible.</p></div></div></section>
 <section><h2>How it works</h2><ol class="steps"><li>Open the bot and send the generated product photo.</li><li>Send a photo of the real item; a phone snapshot is fine.</li><li>Get a list of differences and a concrete fix.</li></ol></section>
 <section><h2>What we check</h2><ul class="checks"><li>garment fit and silhouette</li><li>fabric and texture</li><li>prints and fine patterns</li><li>colour against the original</li><li>count of buttons, pockets, stones</li><li>whether a set is complete</li><li>jewelry size and proportions</li><li>identical pairs</li></ul></section>
+
 <section><h2>Who&#x27;s behind it</h2><p>LookTwinStudio makes AI advertising photos and video for clothing and jewelry brands. For one jewelry brand our pipeline produced 11,246 photos and videos in four months, with an automatic check that the piece in each image stayed itself. The bot puts that kind of check in every seller&#x27;s hands.</p><p><a href="https://looktwinstudio.ru/">Studio website</a></p></section>
 <section><p class="status">The bot is launching. Press /start and we&#x27;ll message you as soon as checks open for everyone.</p><a class="cta" href="https://t.me/contractsforpeoplebot?start=landing_en">Check for free in Telegram</a></section>
-<footer>We store only your Telegram ID and a count of checks. Photos are deleted after processing.</footer>
+<footer><p>We store only your Telegram ID and a count of checks. Photos are deleted after processing.</p></footer>
 </div>
 <script>
-// Pass an ad campaign tag through: ?src=tg_ads_1 turns into /start tg_ads_1
-(function(){var s=new URLSearchParams(location.search).get("src");if(!s||!/^[A-Za-z0-9_]{1,40}$/.test(s))return;
-document.querySelectorAll("a.cta").forEach(function(a){a.href="https://t.me/contractsforpeoplebot?start="+s});})();
+// Pass an ad campaign tag through: ?src=tg_ads_1 turns into /start tg_ads_1 (segment buttons add __<seg>)
+(function(){var s=new URLSearchParams(location.search).get("src");if(!s||!/^[A-Za-z0-9_]{1,30}$/.test(s))return;
+document.querySelectorAll("a.cta").forEach(function(a){var g=a.getAttribute("data-seg");a.href="https://t.me/contractsforpeoplebot?start="+s+(g?"__"+g:"")});})();
 </script>
 </body>
 </html>

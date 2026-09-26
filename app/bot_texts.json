@@ -1,0 +1,16 @@
+{
+  "ru": {
+    "name": "ContractsForPeople",
+    "short_description": "",
+    "description": "",
+    "welcome": "Привет! Я проверяю ИИ-фото товара перед публикацией на маркетплейсе.\nСкоро здесь можно будет прислать сгенерированное фото и фото настоящей вещи, а я скажу, что исказилось и как это исправить.\n\nПрисланные фото удаляются сразу после проверки.",
+    "fallback": "Проверка фото пока в разработке. Напишите /start."
+  },
+  "en": {
+    "name": "ContractsForPeople",
+    "short_description": "",
+    "description": "",
+    "welcome": "Hi! I check AI product photos before they go live on a marketplace.\nSoon you'll be able to send a generated photo and a photo of the real item here, and I'll tell you what changed and how to fix it.\n\nPhotos you send are deleted right after the check.",
+    "fallback": "Photo checks are still in development. Send /start."
+  }
+}

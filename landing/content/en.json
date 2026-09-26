@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "title": "Check AI product photos before they go live",
+    "desc": "A Telegram bot that compares a generated product photo with the real item and shows what changed: print, colour, buttons, fit, jewelry size.",
+    "og_image": ""
+  },
+  "header": {
+    "brand": "LookTwinStudio · Photo check",
+    "lang_other": "Русский"
+  },
+  "hero": {
+    "kicker": "For marketplace sellers on Amazon, Etsy, Wildberries, Ozon and beyond",
+    "h1": "Your AI product photo lies politely. The bot shows where",
+    "lead": "Send the generated photo and a photo of the real item. The bot finds what changed and tells you how to fix it, before a buyer files a return.",
+    "cta": "Check for free in Telegram",
+    "cta_note": "The first checks are free. Photos are deleted right after the check.",
+    "price_note": ""
+  },
+  "illustration": {
+    "asset": "",
+    "alt": "",
+    "caption": ""
+  },
+  "problems": {
+    "h": "A generator doesn't break the picture. It swaps the product",
+    "items": [
+      {"title": "The print got simpler", "text": "Complex patterns get redrawn the model's way. Pretty on screen, different in the box."},
+      {"title": "The colour \"improved\"", "text": "Warmer gold, brighter fabric. The buyer sees a shade they won't receive."},
+      {"title": "A detail went missing", "text": "A button, a pocket, a stone in the pavé. Models don't count; they draw what looks plausible."}
+    ]
+  },
+  "how": {
+    "h": "How it works",
+    "steps": [
+      "Open the bot and send the generated product photo.",
+      "Send a photo of the real item; a phone snapshot is fine.",
+      "Get a list of differences and a concrete fix."
+    ],
+    "mockup": {
+      "asset": "",
+      "alt": "",
+      "caption": ""
+    }
+  },
+  "checks": {
+    "h": "What we check",
+    "groups": [
+      {"title": "", "items": ["garment fit and silhouette", "fabric and texture", "prints and fine patterns", "colour against the original", "count of buttons, pockets, stones", "whether a set is complete", "jewelry size and proportions", "identical pairs"]}
+    ],
+    "note": ""
+  },
+  "segments": {
+    "h": "",
+    "items": []
+  },
+  "who": {
+    "h": "Who's behind it",
+    "text": "LookTwinStudio makes AI advertising photos and video for clothing and jewelry brands. For one jewelry brand our pipeline produced 11,246 photos and videos in four months, with an automatic check that the piece in each image stayed itself. The bot puts that kind of check in every seller's hands.",
+    "link_text": "Studio website",
+    "link_url": "https://looktwinstudio.ru/"
+  },
+  "why_telegram": "",
+  "status": {
+    "text": "The bot is launching. Press /start and we'll message you as soon as checks open for everyone.",
+    "cta": "Check for free in Telegram"
+  },
+  "privacy": {
+    "block": "We store only your Telegram ID and a count of checks. Photos are deleted after processing.",
+    "page_link": ""
+  },
+  "privacy_page": {
+    "title": "",
+    "sections": []
+  }
+}
