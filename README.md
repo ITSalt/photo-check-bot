@@ -33,8 +33,6 @@ cp .env.example .env   # fill in a test bot token of your own
 docker compose up --build
 ```
 
-## Terms (confirmed by the owner on 2026-09-24)
+## Terms
 
-- **Revenue split.** Running costs (model API, server and similar) are deducted from revenue first. Of what remains, 50% goes to the contributing team and 50% to the studio. How the team splits its half is up to the team; the owner's suggestion is equal shares.
-- **Code ownership.** All code and other contributions to this repository belong to the company that owns it (the studio behind LookTwinStudio). Contributors are credited in the git history and in `CONTRIBUTORS.md`.
-- By opening a pull request you agree to these terms.
+See [`TERMS.md`](TERMS.md): the revenue share, how payouts work and code ownership. It's a statement of intent by the studio, not a signed contract. By opening a pull request you agree to these terms.
