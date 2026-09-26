@@ -59,7 +59,8 @@ The terms are in `README.md`: no payment per task; contributors share 50% of net
 ## Facts you must not contradict
 
 - **Status.** Today the bot is a waitlist. `/start` records the user and where they came from, and the bot replies with a welcome. The photo check is in development (tasks T1a–T1f).
-- **Free checks and price.** The owner decides the number of free checks and the indicative price. Write them as `{free_n}` and `{price}`; we fill them in before merge. The panel's range was 20–200 ₽ per check (median about 50 ₽) and $0.2–0.5 in the EN market.
+- **Free checks and price** (owner's decision, 2026-09-26): **3 checks free, then 300 ₽ for a pack of 10 images.** One image means one generated photo checked against the real item. The price is in roubles only; other currencies come with the launch country, so the EN page says "300 RUB" and doesn't invent a dollar rate.
+- **Launch offer:** **the first 100 people on the waitlist get 50% off the plan.** This is true and we will honour it; you may use it as the reason to join now. Don't turn it into a count of people already signed up: we publish no user numbers we can't show.
 - **What we store:**
   - the Telegram user ID;
   - the first source tag from the link;
@@ -72,7 +73,7 @@ The terms are in `README.md`: no payment per task; contributors share 50% of net
   - nobody at the studio views them;
   - we don't use them to train models;
   - for the check, the pair of photos is sent to a vision-model API, and the provider will be named on the privacy page before checks open.
-- **Contact** for data questions: write `{contact}`; the owner fills it in.
+- **Contact** for data questions: mnikitin@itsalt.ru.
 - **What the check covers:**
   - It is built for **clothing and jewelry**, which is the studio's domain.
   - Other categories (bags and leather, shoes, home goods) are **not tuned yet**. Say so; don't imply support.
@@ -97,10 +98,10 @@ The terms are in `README.md`: no payment per task; contributors share 50% of net
 
 **Do:**
 - The first button and its note say plainly that this is a waitlist, and what happens after `/start`.
-- `price_note` gives the free checks and the indicative price, using `{free_n}` and `{price}`.
+- `price_note` gives the free checks, the price and the launch offer (the facts above).
 - Keep the button short and active.
 
-**Accept when:** a reader who sees only the first screen knows it's a waitlist, knows the price range, and knows what the bot will send them.
+**Accept when:** a reader who sees only the first screen knows it's a waitlist, knows the price, and knows what the bot will send them.
 
 ### L2: categories in the cards and the checklist (copy, RU and EN)
 
@@ -233,6 +234,24 @@ The terms are in `README.md`: no payment per task; contributors share 50% of net
 - It never raises.
 
 Size: about 15 lines, standard library only. The wiring into `app/bot.py` is already done: it falls back to Russian until `IMPLEMENTED = True`.
+
+### L12: name the case behind the numbers (copy, RU and EN)
+
+**Owns:** `who.text`, `who.link_text`, `who.link_url`.
+
+**From the panel and the board.** Three personas and one board reviewer didn't believe "11,246 photos for one jewelry brand" without a name or a link.
+
+**Facts** (the owner allows naming the brand):
+- the brand is **Каратов** (Karatov), a jewelry brand; the project ran in 2025–2026;
+- 11,246 pieces of content in 4 months: 9,244 photos and 2,002 videos;
+- 6 operators worked with the studio's Telegram bot in parallel;
+- every piece had an automatic check that the jewelry in the image stayed itself;
+- the public case: https://looktwinstudio.ru/cases/karatov/ (Russian).
+
+**Do:**
+- Rewrite `who.text` with the brand's name and the numbers. The bot puts the same kind of check in every seller's hands.
+- Point the link to the case page; `link_text` says it's the case. On the EN page, say the case is in Russian.
+- No claims beyond the facts: nothing about returns saved or accuracy.
 
 ### L11: audit of the assembled page (later)
 
