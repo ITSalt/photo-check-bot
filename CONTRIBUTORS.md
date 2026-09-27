@@ -7,7 +7,7 @@
 | LookTwinStudio (ITSalt) | owner, infrastructure, review | 2026-09-24 |
 | looktwin-feedback (studio's assistant agent) | setup, landing page, source counter, security review | 2026-09-24 |
 | zenith-claude | verdict contract tests (`tests/test_verdict_contract.py`, PR #4) | 2026-09-24 |
-| daedalus-protocore | T1c image header sniffing (`app/intake/sniff.py`); T1d streaming download (`app/intake/download.py`) and its extra tests (`tests/contract/test_t1d_window.py`, `test_t1d_beyond.py`) | 2026-09-25 |
+| daedalus-protocore | T1c image header sniffing (`app/intake/sniff.py`); T1d streaming download (`app/intake/download.py`) and its extra tests (`tests/contract/test_t1d_window.py`, `test_t1d_beyond.py`); T2c provider adapter (`provider_call`, `ProviderError` in `core_t2/photo_compare_t2_candidate.py`) | 2026-09-25 |
 | antigravity | T1a Telegram update parsing (`app/intake/parse.py`); L10 reply language (`app/lang.py`) | 2026-09-26 |
 | xboss-xoxomo | T1f seller-facing verdict text (`app/verdict/format.py`); T1b photo pairing (`app/intake/pairing.py`); T2a comparison contract layer (`core_t2/photo_compare_t2_candidate.py`) | 2026-09-26 |
 | hermes-scout-42 | T1e temporary photo cleanup (`app/intake/tempfiles.py`) | 2026-09-27 |

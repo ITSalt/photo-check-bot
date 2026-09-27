@@ -127,3 +127,67 @@ def validate_response(payload, expected_attribute_ids, *, expected_inventory_sha
         if u["visibility_in_reference"] not in VISIBILITY:
             raise ContractError(where + ".visibility_in_reference: unknown value")
     return copy.deepcopy(payload)
+
+
+IMPLEMENTED = True
+# ---------------------------------------------------------------------------
+# T2c: provider-adapter -- one call through a fake transport.
+#
+# The transport is any callable `transport(request) -> {"status": int, "body": str}`.
+# `provider_call` sets no host, opens no socket, retries nothing: it invokes the
+# transport exactly once and either returns the parsed response body or raises a
+# typed ProviderError carrying a `.code`:
+#
+#   TIMEOUT        the transport raised TimeoutError (socket.timeout is the same class)
+#   REFUSED        the transport answered with a status other than 200
+#   MALFORMED_JSON status 200, but the body is not parseable JSON
+#
+# The request is passed through untouched and never mutated, and the parsed body is
+# a fresh object (nothing the transport keeps is returned by reference).
+PROVIDER_TIMEOUT = "TIMEOUT"
+PROVIDER_REFUSED = "REFUSED"
+PROVIDER_MALFORMED_JSON = "MALFORMED_JSON"
+PROVIDER_ERROR_CODES = (PROVIDER_TIMEOUT, PROVIDER_REFUSED, PROVIDER_MALFORMED_JSON)
+_OK_STATUS = 200
+
+
+class ProviderError(Exception):
+    """A transport-level failure, typed by `.code` (one of PROVIDER_ERROR_CODES)."""
+
+    def __init__(self, code, detail=""):
+        self.code = code
+        self.detail = detail
+        super().__init__("%s: %s" % (code, detail) if detail else code)
+
+
+def provider_call(transport, request):
+    """Run one provider call through `transport`; return the parsed body.
+
+    Raises ProviderError with a `.code` for a timeout, a refusal or a malformed
+    JSON body. Anything the transport cannot do under its own contract (it is not
+    callable, it answers with something other than a {"status", "body"} mapping, the
+    body is not text, or it decodes to something other than an object) fails closed as
+    ProviderError too rather than passing a half-read answer on. Inputs are never mutated.
+    """
+    try:
+        reply = transport(request)
+    except TimeoutError as exc:  # a real timeout is a typed outcome, not a crash
+        raise ProviderError(PROVIDER_TIMEOUT, str(exc)) from exc
+    if not isinstance(reply, dict):
+        raise ProviderError(PROVIDER_MALFORMED_JSON,
+                            "transport answered %s, not a {status, body} mapping" % type(reply).__name__)
+    status = reply.get("status")
+    if not (isinstance(status, int) and not isinstance(status, bool)) or status != _OK_STATUS:
+        raise ProviderError(PROVIDER_REFUSED, "transport answered status %r" % (status,))
+    body = reply.get("body")
+    if not isinstance(body, (str, bytes, bytearray)):
+        raise ProviderError(PROVIDER_MALFORMED_JSON,
+                            "body is %s, not JSON text" % type(body).__name__)
+    try:
+        decoded = json.loads(body)
+    except (ValueError, TypeError) as exc:  # JSONDecodeError is a ValueError
+        raise ProviderError(PROVIDER_MALFORMED_JSON, str(exc)) from exc
+    if not isinstance(decoded, dict):
+        raise ProviderError(PROVIDER_MALFORMED_JSON,
+                            "body decoded to %s, not the response object" % type(decoded).__name__)
+    return decoded
