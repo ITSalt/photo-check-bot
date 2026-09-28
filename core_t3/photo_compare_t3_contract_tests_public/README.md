@@ -1,4 +1,4 @@
-# T3 photo checker integration — public contract v1
+# T3 photo checker integration — public contract v1.1
 
 Task ID: `photo-checker-t3-contract-v1`
 
@@ -17,9 +17,10 @@ Implement `photo_compare_t3_candidate.py` with:
 
 ## T3a — bot wiring on a fake comparison callable
 
-`session.photos()` returns `(reference_bytes, candidate_bytes)`. Call `compare`
-exactly once. Always call `session.delete_all()` before returning, whether the
-comparison succeeds, times out, fails, or returns malformed data.
+`session.photos()` returns `(reference_bytes, candidate_bytes)`. Pass those exact
+two objects to `compare`, in that order, exactly once. Always call
+`session.delete_all()` before returning, whether the comparison succeeds, times
+out, raises an expected or unexpected exception, or returns malformed data.
 
 The result is exactly:
 
@@ -27,10 +28,11 @@ The result is exactly:
 {"schema_version":"photo-bot-result/1","status":"MATCH|MISMATCH|NEEDS_REVIEW|UNAVAILABLE"}
 ```
 
-Timeout, provider failure, an unknown status, or a malformed result becomes
-`UNAVAILABLE`, never a guessed verdict. If cleanup fails, do not return a result:
-propagate the cleanup error. Logs and returned data must not contain photo bytes,
-photo hashes, provider secrets, or raw exception text.
+Timeout, provider failure, any other comparison exception, an unknown status,
+or a malformed result becomes `UNAVAILABLE`, never a guessed verdict. If cleanup
+fails, do not return a result: propagate the cleanup error. Logs and returned
+data must not contain photo bytes, photo hashes, provider secrets, or raw
+exception text.
 
 The tests establish cleanup through the injected session and inspect observable
 logs/returns. They do not prove absence of hidden filesystem or network side

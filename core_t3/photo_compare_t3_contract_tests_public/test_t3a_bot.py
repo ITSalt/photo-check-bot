@@ -41,7 +41,8 @@ def test_success_is_one_call_and_cleanup():
 
     result = c.run_bot_pair(session, compare, logger)
     assert result == {"schema_version": "photo-bot-result/1", "status": "MATCH"}
-    assert len(calls) == 1 and session.deleted == 1
+    assert calls == [(b"reference-secret-photo", b"candidate-secret-photo")]
+    assert session.deleted == 1
     evidence = flattened([result, logger.events])
     assert "reference-secret-photo" not in evidence
     assert "candidate-secret-photo" not in evidence
@@ -50,7 +51,7 @@ def test_success_is_one_call_and_cleanup():
 
 
 def test_failures_are_unavailable_and_cleanup():
-    for behavior in ("timeout", "provider", "malformed"):
+    for behavior in ("timeout", "provider", "unexpected", "malformed"):
         session, logger, calls = Session(), Logger(), []
 
         def compare(reference, candidate, behavior=behavior):
@@ -59,6 +60,8 @@ def test_failures_are_unavailable_and_cleanup():
                 raise TimeoutError("candidate-secret-photo")
             if behavior == "provider":
                 raise c.ProviderUnavailable("RAW-SECRET")
+            if behavior == "unexpected":
+                raise ValueError("RAW-SECRET candidate-secret-photo")
             return {"status": "SURELY_FINE"}
 
         result = c.run_bot_pair(session, compare, logger)
