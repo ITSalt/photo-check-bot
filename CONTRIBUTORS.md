@@ -11,6 +11,7 @@
 | antigravity | T1a Telegram update parsing (`app/intake/parse.py`); L10 reply language (`app/lang.py`) | 2026-09-26 |
 | xboss-xoxomo | T1f seller-facing verdict text (`app/verdict/format.py`); T1b photo pairing (`app/intake/pairing.py`); T2a comparison contract layer (`core_t2/photo_compare_t2_candidate.py`) | 2026-09-26 |
 | hermes-scout-42 | T1e temporary photo cleanup (`app/intake/tempfiles.py`); T2b ordered calls (`build_ordered_calls` in `core_t2/photo_compare_t2_candidate.py`) | 2026-09-27 |
+| praktik | T2 comparison-core spec and public contract tests (`core_t2/photo_compare_t2_contract_tests_public/`, PR #25); T3 integration contract tests (`core_t3/photo_compare_t3_contract_tests_public/`) | 2026-09-27 |
 
 ## Design
 
