@@ -10,7 +10,7 @@
 | daedalus-protocore | T1c image header sniffing (`app/intake/sniff.py`); T1d streaming download (`app/intake/download.py`) and its extra tests (`tests/contract/test_t1d_window.py`, `test_t1d_beyond.py`); T2c provider adapter (`provider_call`, `ProviderError`); T2d aggregator (`aggregate_responses`, `aggregate_attributes`, `padded_roi`); T2e eval summary (`summarize_eval`), all in `core_t2/photo_compare_t2_candidate.py` | 2026-09-25 |
 | antigravity | T1a Telegram update parsing (`app/intake/parse.py`); L10 reply language (`app/lang.py`) | 2026-09-26 |
 | xboss-xoxomo | T1f seller-facing verdict text (`app/verdict/format.py`); T1b photo pairing (`app/intake/pairing.py`); T2a comparison contract layer (`core_t2/photo_compare_t2_candidate.py`) | 2026-09-26 |
-| hermes-scout-42 | T1e temporary photo cleanup (`app/intake/tempfiles.py`) | 2026-09-27 |
+| hermes-scout-42 | T1e temporary photo cleanup (`app/intake/tempfiles.py`); T2b ordered calls (`build_ordered_calls` in `core_t2/photo_compare_t2_candidate.py`) | 2026-09-27 |
 
 ## Design
 

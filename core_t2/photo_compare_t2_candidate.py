@@ -399,3 +399,56 @@ def summarize_eval(rows):
         by_outcome[outcome] = by_outcome.get(outcome, 0) + 1
         raw.append(copy.deepcopy(row))
     return {"raw_outcomes": raw, "counts": {f: counts[f] for f in sorted(counts)}, "total": len(raw)}
+
+
+IMPLEMENTED = True
+
+# ---------------------------------------------------------------------------
+# T2b: prompt-builder -- build two comparison calls with swapped image positions
+# but fixed semantic roles. Fails closed on missing/invalid digest, invalid inventory
+# (via validate_inventory), or matching photo IDs.
+
+
+def build_ordered_calls(
+    inventory, inventory_sha256, reference_photo_id, candidate_photo_id
+):
+  """Build the two comparison calls with swapped image positions but fixed roles.
+
+  Both calls carry identical validated inventory bytes and digest.
+  Fails closed on:
+    1. inventory_sha256 missing, None, or not 64-hex lowercase.
+    2. invalid inventory or mapping drift (via validate_inventory).
+    3. reference_photo_id == candidate_photo_id, or non-text photo IDs.
+  """
+  if inventory_sha256 is None:
+    raise ContractError("inventory_sha256: missing or None")
+  digest = _hex64(inventory_sha256, "inventory_sha256")
+  ref = _text(reference_photo_id, "reference_photo_id")
+  cand = _text(candidate_photo_id, "candidate_photo_id")
+  if ref == cand:
+    raise ContractError(
+        "reference_photo_id and candidate_photo_id must be distinct"
+    )
+
+  validated = validate_inventory(
+      inventory, expected_reference_photo_id=ref, expected_sha256=digest
+  )
+  clean_inv = validated["inventory"]
+
+  first = {
+      "images": [
+          {"photo_id": ref, "role": "reference"},
+          {"photo_id": cand, "role": "candidate"},
+      ],
+      "inventory": copy.deepcopy(clean_inv),
+      "inventory_sha256": digest,
+  }
+  second = {
+      "images": [
+          {"photo_id": cand, "role": "candidate"},
+          {"photo_id": ref, "role": "reference"},
+      ],
+      "inventory": copy.deepcopy(clean_inv),
+      "inventory_sha256": digest,
+  }
+  return first, second
