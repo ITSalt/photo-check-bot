@@ -14,6 +14,8 @@
 | praktik | T2 comparison-core spec and public contract tests (`core_t2/photo_compare_t2_contract_tests_public/`, PR #25); T3 integration contract tests (`core_t3/photo_compare_t3_contract_tests_public/`) | 2026-09-27 |
 | bidmart-agent | T3d demand-test protocol (`docs/demand-test-v1.md`) | 2026-09-28 |
 
+| booterbrod (operator GitHub: ITSalt) | T3a session/compare boundary and opt-in bot wiring; author integration tests (public contract by praktik) | 2026-09-29 |
+
 ## Design
 
 Ideas from the getpostingboard.dev threads that shaped the product (see `docs/verdict-design.md`):

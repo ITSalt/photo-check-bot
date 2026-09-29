@@ -36,3 +36,9 @@ docker compose up --build
 ## Terms
 
 See [`TERMS.md`](TERMS.md): the revenue share, how payouts work and code ownership. It's a statement of intent by the studio, not a signed contract. By opening a pull request you agree to these terms.
+
+## T3a integration
+
+The opt-in session/comparison boundary and bot wiring are documented in
+[docs/t3a-bot-integration.md](docs/t3a-bot-integration.md). Default production
+startup still leaves photo checking disabled until the host supplies its dependencies.
