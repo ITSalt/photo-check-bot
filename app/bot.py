@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 from app import lang, waitlist
+from app.intake.parse import parse_update
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API = f"https://api.telegram.org/bot{TOKEN}"
@@ -43,11 +44,19 @@ def reply_lang(msg):
         return "ru"
 
 
-def handle(update):
+def handle(update, *, photo_checks=None):
     msg = update.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
     if chat is None:
         return
+    if photo_checks is not None:
+        try:
+            event = parse_update(update)
+        except Exception:
+            log.warning("photo update rejected")
+            return
+        if event is None:
+            return
     texts = TEXTS.get(reply_lang(msg), TEXTS["ru"])
     if (msg.get("text") or "").startswith("/start"):
         user = (msg.get("from") or {}).get("id")
@@ -55,12 +64,23 @@ def handle(update):
             source, is_new = waitlist.record(user, msg.get("text"))
             if is_new:
                 log.info("new user from source=%s totals=%s", source, waitlist.counts())
-        call("sendMessage", {"chat_id": chat, "text": texts["welcome"]})
+        if photo_checks is None:
+            call("sendMessage", {"chat_id": chat, "text": texts["welcome"]})
+            return
+    if photo_checks is not None:
+        try:
+            messages = photo_checks.handle(event)
+        except Exception:
+            # Includes cleanup failure: no verdict and no raw exception/photo data.
+            log.warning("photo processing stopped")
+            return
+        for text in messages:
+            call("sendMessage", {"chat_id": chat, "text": text})
     else:
         call("sendMessage", {"chat_id": chat, "text": texts["fallback"]})
 
 
-def main():
+def main(*, photo_checks=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     offset = None
     log.info("bot started")
@@ -71,7 +91,7 @@ def main():
                 params["offset"] = offset
             for update in call("getUpdates", params):
                 offset = update["update_id"] + 1
-                handle(update)
+                handle(update, photo_checks=photo_checks)
         except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
             # Never log the URL: it contains the token.
             log.warning("polling error: %s", type(exc).__name__)
