@@ -27,24 +27,30 @@ def call_provider(request, transport, environ, logger):
     if err_type is not None:
         raise ProviderUnavailable(err_type)
         
+    decode_fail = False
+    
     if isinstance(res, dict):
         if "status" not in res or "body" not in res:
-            raise ProviderUnavailable("MALFORMED_BODY")
-        status = res["status"]
-        body = res["body"]
+            decode_fail = True
+        else:
+            status = res["status"]
+            body = res["body"]
     else:
         if hasattr(res, "status_code"):
             status = res.status_code
             try:
                 body = res.json() if hasattr(res, "json") else res
             except Exception:
-                raise ProviderUnavailable("MALFORMED_BODY")
+                decode_fail = True
         elif hasattr(res, "status"):
             status = res.status
             body = res
         else:
-            raise ProviderUnavailable("MALFORMED_BODY")
+            decode_fail = True
             
+    if decode_fail:
+        raise ProviderUnavailable("MALFORMED_BODY")
+        
     if status != 200:
         raise ProviderUnavailable("HTTP_ERROR")
         

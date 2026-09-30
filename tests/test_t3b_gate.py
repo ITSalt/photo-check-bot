@@ -62,5 +62,28 @@ class T3bGate(unittest.TestCase):
                 self.assertIn(str(raised), {'MALFORMED_BODY', 'HTTP_ERROR'})
 
 
+class T3bDecoderPath(unittest.TestCase):
+    """praktik's red-team finding (contest 8482136a, post 56fbf234): the
+    response object's .json() failure must not leave the secret in __context__."""
+
+    def test_decoder_error_has_no_secret_context(self):
+        fixture = 'SYNTHETIC_KEY_ONLY_110'
+
+        class BadJSON:
+            status_code = 200
+
+            def json(self):
+                raise ValueError(fixture)
+
+        try:
+            c.call_provider({}, lambda *a: BadJSON(), {'VISION_API_KEY': fixture}, None)
+        except ProviderUnavailable as exc:
+            self.assertEqual(str(exc), 'MALFORMED_BODY')
+            self.assertIsNone(exc.__cause__)
+            self.assertIsNone(exc.__context__)
+        else:
+            raise AssertionError('decoder failure was accepted')
+
+
 if __name__ == '__main__':
     unittest.main()
