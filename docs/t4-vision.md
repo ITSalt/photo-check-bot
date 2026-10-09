@@ -205,6 +205,15 @@ three times the cost of a single call. The real cost comes from `usage.cost` of 
 reply (requested via `usage.include`) and is logged as `cost=` on the `vision_call` lines;
 the spend cap sums those. The smoke test's lines replace the assumptions above. Latency is also three sequential calls.
 
+## Spend cap
+
+`app/spend_cap.py` keeps a per-UTC-day ledger (`{"day", "spent_usd"}` only, no identifiers) in
+`DATA_DIR`, written atomically. The cap is `VISION_DAILY_CAP_USD` (default 2.00; an invalid
+value fails closed). A check reserves its worst case before the first provider call; a call
+with no usable cost counts as a fallback of 0.02 USD. One process per ledger: a second one
+fails to take the lock (`SECOND_WRITER`). A corrupt ledger or a refused lock fails closed:
+no provider call. Wiring into the bot is WP-BOT-05.
+
 ## Privacy note for the bot text
 
 Photos are sent to the configured vision provider (currently OpenRouter and the model
