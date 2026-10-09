@@ -19,6 +19,7 @@
     "UNAVAILABLE": "Не удалось выполнить проверку. Попробуйте позже. Эта проверка не списана.",
     "limit_reached": "Дневной лимит проверок исчерпан, попробуйте завтра (UTC). Фото удалены, проверка не выполнялась.",
     "free_used_up": "Бесплатные проверки закончились: 3 из 3. Платные проверки скоро появятся, вы в списке ожидания. Фото удалены, проверка не выполнялась.",
+    "uncharged_limit": "Сегодня лимит неуверенных проверок исчерпан — попробуйте завтра (UTC). Фото удалены, проверка не выполнялась.",
     "forget_done": "Готово: бот удалил всё, что хранил о вас. Если снова напишете /start, вы снова попадёте в список ожидания.",
     "forget_failed": "Не удалось удалить ваши данные. Попробуйте позже."
   },
@@ -42,6 +43,7 @@
     "UNAVAILABLE": "The check could not be run. Try again later. This check was not counted.",
     "limit_reached": "Daily check limit reached, try again tomorrow (UTC). The photos were deleted, no check was run.",
     "free_used_up": "Your free checks are used up: 3 of 3. Paid checks are coming soon, you are on the waitlist. The photos were deleted, no check was run.",
+    "uncharged_limit": "Today's limit of unsure checks is used up. Try again tomorrow (UTC). The photos were deleted, no check was run.",
     "forget_done": "Done: the bot deleted everything it kept about you. If you send /start again, you will be on the waitlist again.",
     "forget_failed": "Could not delete your data. Try again later."
   }

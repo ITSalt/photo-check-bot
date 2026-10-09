@@ -190,6 +190,18 @@ folders); CI runs `python -c "import app.vision_compare, core_t2, core_t3"` in t
 image and `tests/test_image_layout.py` checks the same layout from the Dockerfile. If
 either core is not importable, the feature stays off.
 
+## Uncharged-check limit (WP-BOT-10, D-15)
+
+NEEDS_REVIEW, UNAVAILABLE and overrun checks are free and not stored, so each user is capped
+at `UNCHARGED_DAILY_LIMIT` of them per UTC day (default 10; empty or unset -> 10; invalid ->
+10 with `uncharged_limit_config code=INVALID`). The counts live in memory only, keyed by the
+same HMAC key, reset at UTC midnight and at restart (accepted: restarts are rare); nothing is
+written to disk, so `check_counter.json` keeps `{key, used, last}`. After the counter allows
+and before `reserve()`, a user at the limit is refused for ANY check until UTC midnight (the
+outcome is unknown before the call): reply `uncharged_limit` (ru/en), log
+`check_refused code=UNCHARGED_LIMIT`, no download, no provider call, no reservation.
+MATCH and MISMATCH do not count. `/forget` clears the user's in-memory count too.
+
 ## Logging
 
 Per provider call (three per check), from the provider `usage` field, which every
