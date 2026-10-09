@@ -11,7 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from app.photo_compare import ProviderUnavailable, run_bot_pair
-from app import vision_compare, vision_core, vision_request, vision_transport
+from app import vision_compare, vision_controls, vision_core, vision_request, vision_transport
+from app.verdict_notes import REASON_RU, format_notes
 from app.vision_request import AnswerError, ImageRejected
 from core_t2 import photo_compare_t2_candidate as t2
 from app.vision_transport import TransportConfigError, make_transport
@@ -63,8 +64,9 @@ class Session:
         self.deleted += 1
 
 
-INV = [{"attribute_id": "button.count", "claim": "Two buttons.", "reference_roi": [100, 100, 300, 400]},
-       {"attribute_id": "print.layout", "claim": "Logo centred.", "reference_roi": [500, 100, 300, 400]}]
+FINE = {"attribute_id": "logo.text", "claim": "текст логотипа: BRAND", "reference_roi": [500, 600, 100, 100]}
+INV = [{"attribute_id": "button.count", "claim": "пуговицы: две", "reference_roi": [100, 100, 300, 400]},
+       {"attribute_id": "print.layout", "claim": "принт: логотип по центру", "reference_roi": [500, 100, 300, 400]}]
 
 
 def chat(content, usage=None, finish="stop"):
@@ -117,7 +119,7 @@ class FakeModel:
             return {"status": 200, "body": chat({"attributes": self.inventory}, self.usage)}
         sha = next(p["text"].split(": ", 1)[1] for p in parts if p["text"].startswith("inventory_sha256: "))
         overrides, unmapped = self.per_order[index - 1]
-        answer = compare_answer(sha, overrides, unmapped)
+        answer = compare_answer(sha, overrides, unmapped, attrs=self.inventory)
         if self.mutate:
             self.mutate(index, answer)
         return {"status": 200, "body": chat(answer, self.usage)}
@@ -240,29 +242,227 @@ class CoreTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(AnswerError):
                 vision_core.parse_compare(chat(payload), v)
 
-    def test_rollup_table(self):
-        r = vision_core.rollup
-        none, rev = "NO_UNMAPPED_EVIDENCE", "NEEDS_REVIEW"
-        cases = [({"a": "MATCH"}, none, "MATCH"), ({"a": "MATCH", "b": "MATCH"}, none, "MATCH"),
-                 ({"a": "MATCH", "b": "MISMATCH"}, none, "MISMATCH"),
-                 ({"a": "ASYMMETRIC_PASS", "b": "MISMATCH"}, rev, "MISMATCH"),
-                 ({"a": "MATCH"}, "MISMATCH", "MISMATCH"), ({"a": "MATCH"}, rev, "NEEDS_REVIEW"),
-                 ({"a": "MATCH", "b": "NEEDS_REVIEW"}, none, "NEEDS_REVIEW"),
-                 ({"a": "MATCH", "b": "ASYMMETRIC_PASS"}, none, "NEEDS_REVIEW"),
-                 ({"a": "NOT_VISIBLE_IN_REFERENCE"}, none, "NEEDS_REVIEW"), ({}, none, "NEEDS_REVIEW")]
-        for attrs, cov, want in cases:
-            with self.subTest(attrs=attrs, cov=cov):
-                self.assertEqual(r({"attributes": attrs, "coverage": cov, "escalations": {}}), want)
 
-    def test_uses_t2_aggregator(self):
-        with patch.object(t2, "aggregate_responses", return_value={"attributes": {"a": "MISMATCH"},
-                                                                    "coverage": "NO_UNMAPPED_EVIDENCE",
-                                                                    "escalations": {}}) as agg:
-            v = vision_core.parse_inventory(chat({"attributes": INV}))
-            sha = v["sha256"]
-            status = vision_core.decide(compare_answer(sha), compare_answer(sha))
-        self.assertEqual(status, "MISMATCH")
-        agg.assert_called_once()
+def run(per_order, inventory=INV):
+    """assess() on two scripted compare answers."""
+    v = vision_core.parse_inventory(chat({"attributes": inventory}))
+    sha = v["sha256"]
+    answers = [compare_answer(sha, o, u, attrs=inventory) for o, u in per_order]
+    return vision_core.assess(v, *[vision_core.parse_compare(chat(a), v) for a in answers])
+
+
+def reasons(result):
+    return {i["attribute_id"]: i["reason"] for i in result["to_check"]}
+
+
+class AssessTests(unittest.TestCase):
+    def test_all_confirmed_is_match(self):
+        r = run([(None, ()), (None, ())])
+        self.assertEqual(r, {"status": "MATCH", "total": 2, "confirmed": ["button.count", "print.layout"],
+                             "to_check": [], "differs": [], "extra": "none"})
+
+    def test_prompts_exclude_scene_and_ask_for_product_only(self):
+        inv = vision_request.INVENTORY_INSTRUCTION
+        for word in ("background", "scene", "lighting", "angle", "props", "hands", "people"):
+            self.assertIn(word, inv)
+        self.assertIn("NEVER list", inv)
+        self.assertIn("ONLY parts of the product itself", vision_core.COMPARE_INSTRUCTION)
+        self.assertIn("NEVER list the background", vision_core.COMPARE_INSTRUCTION)
+        self.assertIn("MISMATCH with evidence_quality NONE", vision_core.COMPARE_INSTRUCTION)
+
+    def test_to_check_reasons(self):
+        weak = ("MATCH", "PARTIAL")
+        r = run([({"button.count": weak}, ()), ({"button.count": weak}, ())])
+        self.assertEqual((r["status"], reasons(r), r["confirmed"]), ("NEEDS_REVIEW", {"button.count": "weak_evidence"}, ["print.layout"]))
+        nv = ("NOT_VISIBLE_IN_REFERENCE", "NONE")
+        r = run([({"button.count": nv}, ())] * 2)
+        self.assertEqual(reasons(r), {"button.count": "not_visible"})
+        hidden = ("MISMATCH", "NONE")  # candidate angle hides it: NOT a mismatch
+        r = run([({"button.count": hidden}, ())] * 2)
+        self.assertEqual((r["status"], reasons(r), r["differs"]), ("NEEDS_REVIEW", {"button.count": "not_visible"}, []))
+        r = run([(None, ()), ({"button.count": ("MISMATCH", "DIRECT")}, ())])
+        self.assertEqual((r["status"], reasons(r)), ("NEEDS_REVIEW", {"button.count": "orders_disagree"}))
+
+    def test_hidden_in_one_order_only(self):
+        r = run([({"button.count": ("MISMATCH", "PARTIAL")}, ()), ({"button.count": ("MISMATCH", "NONE")}, ())])
+        self.assertEqual(reasons(r), {"button.count": "not_visible"})
+        r = run([({"button.count": ("MISMATCH", "NONE")}, ()), ({"button.count": ("MISMATCH", "PARTIAL")}, ())])
+        self.assertEqual(reasons(r), {"button.count": "not_visible"})
+
+    def test_absent_where_visible_is_mismatch(self):
+        both = ({"print.layout": ("MISMATCH", "DIRECT")}, ())
+        r = run([both, both])
+        self.assertEqual(r["status"], "MISMATCH")
+        self.assertEqual(r["differs"], [{"attribute_id": "print.layout", "label": "принт"}])
+        self.assertEqual(r["confirmed"], ["button.count"])
+
+    def test_fine_detail_rules(self):
+        inv = INV + [FINE]
+        self.assertEqual(run([(None, ())] * 2, inv)["status"], "MATCH")  # direct in both orders: confirmed
+        weak = ({"logo.text": ("MATCH", "PARTIAL")}, ())
+        r = run([weak, weak], inv)
+        self.assertEqual((r["status"], reasons(r)), ("NEEDS_REVIEW", {"logo.text": "fine_detail_unverified"}))
+        r = run([(None, ()), ({"logo.text": ("MISMATCH", "DIRECT")}, ())], inv)
+        self.assertEqual(reasons(r), {"logo.text": "fine_detail_unverified"})
+        # the same weak evidence on a coarse attribute is labelled differently, same status
+        r = run([({"button.count": ("MATCH", "PARTIAL")}, ())] * 2, inv)
+        self.assertEqual(reasons(r), {"button.count": "weak_evidence"})
+        # hidden fine detail is "not visible", the more useful note
+        hid = ({"logo.text": ("MISMATCH", "NONE")}, ())
+        self.assertEqual(reasons(run([hid, hid], inv)), {"logo.text": "not_visible"})
+
+    def test_fine_threshold_boundary(self):
+        self.assertTrue(vision_core.is_fine([0, 0, 100, 199]))
+        self.assertFalse(vision_core.is_fine([0, 0, 100, 200]))
+
+    def test_extra_elements(self):
+        r = run([(None, (EXTRA,)), (None, (EXTRA,))])
+        self.assertEqual((r["status"], r["extra"]), ("MISMATCH", "confirmed"))
+        r = run([(None, (EXTRA,)), (None, ())])
+        self.assertEqual((r["status"], r["extra"], r["to_check"]), ("NEEDS_REVIEW", "unconfirmed", []))
+
+    def test_same_product_on_two_backgrounds_is_not_mismatch(self):
+        # A correct model reports no scene differences: nothing for code to turn into MISMATCH.
+        for candidate in (PNG, PNG + b"other-background"):
+            model = FakeModel()
+            compare = vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)
+            self.assertEqual(compare(JPEG, candidate)["status"], "MATCH")
+
+    def test_known_gap_scene_extra_is_prompt_only(self):
+        # T2 unmapped elements have no product/scene field, so code cannot tell them apart:
+        # a model that lists the table in both orders produces MISMATCH. Only the prompt prevents it.
+        scene = {"candidate_roi": BOX, "description": "table", "visibility_in_reference": "VISIBLE_AND_ABSENT"}
+        self.assertEqual(run([(None, (scene,))] * 2)["status"], "MISMATCH")
+
+    def test_labels(self):
+        label = vision_core.label_of
+        self.assertEqual(label("застёжка: молния"), "застёжка")
+        self.assertEqual(label("текст логотипа"), "текст логотипа")
+        self.assertEqual(label("see evil.example/x @bot\nnow: y"), "see evil example x bot now")
+        self.assertNotIn(".", label("evil.com: x"))
+        self.assertEqual(len(label("я" * 100)), 40)
+        self.assertEqual(label(":: x"), "деталь")
+
+    def test_review_share_arithmetic(self):
+        f = vision_core.expected_review_share
+        self.assertAlmostEqual(f(12, 0.98), 1 - 0.98 ** 12)
+        self.assertAlmostEqual(f(12, 0.95), 0.4596, places=3)
+        self.assertAlmostEqual(f(1, 1.0), 0.0)
+        self.assertAlmostEqual(f(6, 0.95, 0.1), 1 - 0.95 ** 6 * 0.9)
+
+
+class NotesTests(unittest.TestCase):
+    def result(self, **kw):
+        base = {"status": "NEEDS_REVIEW", "total": 12, "confirmed": ["a"] * 9, "differs": [], "extra": "none",
+                "to_check": [{"attribute_id": "c", "label": "застёжка", "reason": "not_visible"},
+                             {"attribute_id": "l", "label": "текст логотипа", "reason": "fine_detail_unverified"},
+                             {"attribute_id": "w", "label": "цвет", "reason": "weak_evidence"},
+                             {"attribute_id": "o", "label": "карман", "reason": "orders_disagree"}][:3]}
+        base.update(kw)
+        return base
+
+    def test_example_text(self):
+        r = self.result()
+        r["to_check"] = r["to_check"][:2]
+        self.assertEqual(format_notes(r), "Совпадает: 9 из 12. Проверьте сами: застёжка (не видно), текст логотипа (мелкая деталь).")
+
+    def test_all_reasons_words(self):
+        self.assertEqual(set(REASON_RU), {"not_visible", "orders_disagree", "weak_evidence", "fine_detail_unverified"})
+        text = format_notes(self.result(to_check=self.result()["to_check"] + [
+            {"attribute_id": "o", "label": "карман", "reason": "orders_disagree"}]))
+        for word in ("не видно", "мелкая деталь", "не уверены", "ответы расходятся"):
+            self.assertIn(word, text)
+
+    def test_mismatch_and_extras(self):
+        text = format_notes(self.result(status="MISMATCH", to_check=[], differs=[{"attribute_id": "p", "label": "принт"}],
+                                        extra="confirmed"))
+        self.assertEqual(text, "Совпадает: 9 из 12. Отличается: принт. На сгенерированном фото есть лишняя деталь товара.")
+        self.assertIn("Возможна лишняя деталь", format_notes(self.result(to_check=[], extra="unconfirmed")))
+
+    def test_list_cap_match_and_malformed(self):
+        many = [{"attribute_id": str(i), "label": "д%d" % i, "reason": "weak_evidence"} for i in range(9)]
+        text = format_notes(self.result(to_check=many))
+        self.assertIn("д5 (не уверены) и ещё 3", text)
+        self.assertNotIn("д6", text)
+        self.assertEqual(format_notes(self.result(status="MATCH", to_check=[])), "")
+        for bad in (None, {}, {"status": "MATCH"}, self.result(status="UNAVAILABLE"), self.result(total="x"),
+                    self.result(to_check=[{"label": "x", "reason": "weird"}])):
+            self.assertEqual(format_notes(bad), "")
+
+    def test_photo_checks_appends_notes_and_keeps_t3a_result(self):
+        from app.photo_checks import MESSAGES, PhotoChecks
+        detail = self.result()
+        detail["to_check"] = detail["to_check"][:1]
+        for compare_result, expected in (
+                (detail, MESSAGES["NEEDS_REVIEW"] + " Совпадает: 9 из 12. Проверьте сами: застёжка (не видно)."),
+                ({"status": "NEEDS_REVIEW"}, MESSAGES["NEEDS_REVIEW"]),
+                ({**detail, "status": "MATCH"}, MESSAGES["MATCH"]),
+                ({"status": "UNAVAILABLE"}, MESSAGES["UNAVAILABLE"])):
+            session = Session()
+            checks = PhotoChecks(lambda a, b: session, lambda r, c: compare_result)
+            checks.handle({"user_id": 1, "chat_id": 1, "kind": "photo", "file_id": "g", "caption": None})
+            self.assertEqual(checks.handle({"user_id": 1, "chat_id": 1, "kind": "photo", "file_id": "r", "caption": "real"}), [expected])
+        self.assertEqual(run_bot_pair(Session(), lambda r, c: detail, None),
+                         {"schema_version": "photo-bot-result/1", "status": "NEEDS_REVIEW"})
+
+
+class ControlsTests(unittest.TestCase):
+    def fake(self, table):
+        calls = []
+
+        def compare(ref, cand):
+            calls.append((ref, cand))
+            return {"status": table[(ref == cand)].pop(0)}
+        return compare, calls
+
+    def test_run_and_summary(self):
+        files = {"a": b"A", "b": b"B", "c": b"C"}
+        rows = [{"kind": "same", "ref": "a"}, {"kind": "recrop", "ref": "a", "cand": "b"},
+                {"kind": "different", "ref": "a", "cand": "c"}]
+        compare, calls = self.fake({True: ["MATCH", "MATCH"], False: ["MATCH", "NEEDS_REVIEW", "MISMATCH", "MISMATCH", "UNAVAILABLE", "x"]})
+        tally = vision_controls.run_controls(rows, compare, 2, files.__getitem__)
+        self.assertEqual(calls[0], (b"A", b"A"))
+        self.assertEqual(tally["same"]["MATCH"], 2)
+        self.assertEqual(tally["recrop"], {"MATCH": 1, "MISMATCH": 0, "NEEDS_REVIEW": 1, "UNAVAILABLE": 0})
+        self.assertEqual(tally["different"]["MISMATCH"], 2)
+        out = vision_controls.summarize(tally)
+        self.assertEqual(out["positive"]["runs"], 4)
+        self.assertEqual(out["positive"]["MATCH"], 0.75)
+        self.assertEqual(out["positive"]["NEEDS_REVIEW"], 0.25)
+        self.assertTrue(out["rule_too_strict"])
+
+    def test_threshold_boundary(self):
+        def tally(m, n):
+            t = {k: {s: 0 for s in vision_controls.STATUSES} for k in vision_controls.KINDS}
+            t["same"]["MATCH"], t["same"]["NEEDS_REVIEW"] = m, n
+            return t
+        self.assertFalse(vision_controls.summarize(tally(9, 1))["rule_too_strict"])
+        self.assertTrue(vision_controls.summarize(tally(89, 11))["rule_too_strict"])
+
+    def test_unknown_kind_and_main(self):
+        with self.assertRaises(ValueError):
+            vision_controls.run_controls([{"kind": "x", "ref": "a"}], lambda a, b: {}, 1, lambda p: b"")
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            m = os.path.join(d, "m.json")
+            open(m, "w").write(json.dumps([{"kind": "same", "ref": "a"}, {"kind": "different", "ref": "a", "cand": "b"}]))
+            read = lambda p: p.encode()
+            self.assertEqual(vision_controls._main([m, "--repeats", "2"], {}, lambda a, b: {"status": "MATCH" if a == b else "MISMATCH"}, read), 0)
+            self.assertEqual(vision_controls._main([m], {}, lambda a, b: {"status": "NEEDS_REVIEW"}, read), 1)
+        self.assertEqual(vision_controls._main([], {}), 2)
+        self.assertEqual(vision_controls._main(["m.json"], {}), 2)
+
+    def test_output_has_no_paths(self):
+        import io, os, tempfile
+        from contextlib import redirect_stdout
+        with tempfile.TemporaryDirectory() as d:
+            m = os.path.join(d, "secretname.json")
+            open(m, "w").write(json.dumps([{"kind": "same", "ref": "private-file-name"}]))
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vision_controls._main([m], {}, lambda a, b: {"status": "MATCH"}, lambda p: b"x")
+        self.assertNotIn("private-file-name", buf.getvalue())
+        self.assertNotIn("secretname", buf.getvalue())
 
 
 class TransportTests(unittest.TestCase):
