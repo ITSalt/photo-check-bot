@@ -103,6 +103,10 @@ def _cost(body):
 
 OVERRUN = "SPEND_CAP_OVERRUN"
 BEGIN = "SPEND_CAP_BEGIN"
+# ImageRejected code -> the bot text key explaining it (app/bot_texts.json); refused
+# before any provider call, so the check is UNAVAILABLE and not charged.
+IMAGE_REASONS = {"SIDE_TOO_LONG": "image_too_large", "TOO_LARGE": "image_too_large",
+                 "NO_SIZE": "image_unreadable"}
 
 
 def _hook(hook, where):
@@ -196,6 +200,9 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
             return core.assess(validated, answer_first, answer_second)
         except ImageRejected as exc:
             log.warning("vision_rejected code=%s", exc.args[0])
+            reason = IMAGE_REASONS.get(exc.args[0])
+            if reason:   # the seller gets one line saying what to do instead
+                return {"status": "UNAVAILABLE", "reason": reason}
         except ProviderUnavailable as exc:
             code = str(exc)
             log.warning("vision_unavailable stage=%s code=%s", stage,

@@ -295,7 +295,11 @@ is a real ceiling only if one call cannot cost more. The constants and their ari
   nothing re-encoded. For a Telegram photo the bot takes the largest size variant within the
   limit (normally Telegram's 1280 px one); an image sent as a document with a longer side, or
   with a header that cannot be read, is refused before any call (`vision_rejected
-  code=SIDE_TOO_LONG` / `NO_SIZE`, the check is UNAVAILABLE and not charged). Worst case per
+  code=SIDE_TOO_LONG` / `NO_SIZE`, the check is UNAVAILABLE and not charged). Instead of the
+  generic UNAVAILABLE text the seller gets one line saying what to do: `image_too_large`
+  («Фото слишком большое для проверки — пришлите его как фото, а не файлом.»; also for the
+  8 MiB byte cap) or `image_unreadable` («Не могу прочитать это изображение — пришлите его
+  как фото.»), ru/en in `app/bot_texts.json`. Worst case per
   image: 3,096 tokens (Gemini 2.x tiling at 1536 x 385; Gemini 3 "high" is 1,120). This is a
   planning bound from public rules, not measured on this model: the `usage_prompt` numbers of
   the `vision_call` lines show the real count.

@@ -9,15 +9,17 @@ e. a cut-off reply is recorded (real cost, else the fallback) and ends UNAVAILAB
 f. mutations that drop max_tokens or the input bound fail here.
 """
 import math
+import os
 import pathlib
 import re
 import unittest
+from unittest.mock import patch
 
 from app import vision_core, vision_request, vision_wiring
 from app.intake import parse
 from app.photo_checks import TEXTS
 from app.vision_request import AnswerError, ImageRejected
-from tests.test_bot_wiring import WiringBase
+from tests.test_bot_wiring import USER, WiringBase, update
 from tests.test_t4_vision import (ENV, INV, JPEG, PNG, FakeModel, chat, jpeg, parts_of, png,
                                   webp)
 
@@ -126,7 +128,7 @@ class InputBound(unittest.TestCase):
             costs = []
             with self.assertLogs("vision", "WARNING") as logs:
                 result = chain(model, on_call=costs.append, on_begin=lambda: True)(reference, candidate)
-            self.assertEqual(result, {"status": "UNAVAILABLE"})
+            self.assertEqual(result, {"status": "UNAVAILABLE", "reason": "image_too_large"})
             self.assertEqual((model.requests, costs), ([], []))
             self.assertIn("vision_rejected code=SIDE_TOO_LONG", "\n".join(logs.output))
 
@@ -210,6 +212,50 @@ class CutOffInTheBot(WiringBase):
                 self.assertEqual(self.holds(), {})
                 self.assertEqual(self.used(checks), 0)               # the seller is not charged
                 self.assertIn("code=CUT_OFF", "\n".join(logs.output))
+
+
+def document(user, lang, file_id, size):
+    """A Telegram update with an image sent as a file (no size variants)."""
+    return {"update_id": 1, "message": {
+        "chat": {"id": user, "type": "private"}, "from": {"id": user, "language_code": lang},
+        "document": {"file_id": file_id, "file_size": size, "mime_type": "image/png", "file_name": "x.png"}}}
+
+
+class RefusedImageInTheBot(WiringBase):
+    """4b: an image refused before any call gets one line saying what to send instead."""
+
+    def test_too_large_or_unreadable_document_gets_its_own_line(self):
+        from tests import test_bot_wiring
+        cases = (("big-doc", png(2048, 1536, b"x"), "image_too_large"),
+                 ("tall-doc", png(800, 1537, b"x"), "image_too_large"),
+                 ("blind-doc", b"\x89PNG\r\n\x1a\n" + b"no-header", "image_unreadable"))
+        for lang in ("ru", "en"):
+            for file_id, data, key in cases:
+                for as_generated in (True, False):
+                    with self.subTest(lang=lang, file_id=file_id, generated=as_generated), \
+                            patch.dict(test_bot_wiring.FILES, {file_id: data}):
+                        self.fresh()
+                        model = FakeModel(usage={"cost": 0.004})
+                        checks = self.build(lambda environ, **hooks: chain(model, environ, **hooks))
+                        if as_generated:
+                            first = document(USER, lang, file_id, len(data))
+                            second = update(USER, lang, photo="real-file-id-1")
+                        else:
+                            first = update(USER, lang, photo="gen-file-id-1")
+                            second = document(USER, lang, file_id, len(data))
+                        with self.assertLogs("vision", "WARNING"):
+                            reply = self.run_updates(checks, first, second)[1]
+                        self.assertEqual(reply, TEXTS[lang][key])
+                        self.assertEqual(model.requests, [])          # nothing sent
+                        self.assertEqual(self.used(checks), 0)        # not charged
+                        self.assertEqual(self.ledger()["spent_usd"], 0)
+                        self.assertEqual(self.holds(), {})
+                        self.assertEqual(os.listdir(self.photo_dir), [])
+
+    def test_other_unavailable_keeps_the_generic_line(self):
+        model = FakeModel(usage={"cost": 0.004}, fail_at=0, reply=TimeoutError())
+        checks = self.build(lambda environ, **hooks: chain(model, environ, **hooks))
+        self.assertEqual(self.pair(checks)[1], TEXTS["ru"]["UNAVAILABLE"])
 
 
 if __name__ == "__main__":

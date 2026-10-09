@@ -289,6 +289,7 @@ def build_photo_checks(environ, api_get_file, api_fetch, *, data_dir=None, photo
         # orphans() could not read the ledger (corrupt, or the lock file outlived a deleted
         # ledger): every reserve() would refuse, so keep the feature off and say so at
         # startup ("vision enabled" is absent). Recovery: docs/t4-vision.md, Spend cap.
+        # _loaded is private: spend_cap.py stays verbatim and has no public accessor for it.
         log.error("vision disabled, code=SPEND_CAP_LEDGER")
         cap.close()
         return None
