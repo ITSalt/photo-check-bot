@@ -11,6 +11,7 @@ files and the directory and raises if it cannot (T3a: no verdict then).
 
 Nothing here logs: no file id, path or bytes can reach a log line.
 """
+import errno
 import os
 import shutil
 import tempfile
@@ -33,14 +34,27 @@ class Session:
         return reference, candidate
 
     def delete_all(self):
-        """Remove both photos and the session directory; raise if anything stays."""
+        """Remove both photos and the session directory; raise if anything stays.
+
+        Every file and then the directory is attempted whatever failed before. The error
+        carries the errno and a fixed message, never a path (the directory name is random
+        and a traceback must not show it). A retry after the cause is gone cleans up.
+        """
+        failed = None
         for path in (self.reference_path, self.candidate_path):
             try:
                 os.remove(path)
             except FileNotFoundError:
                 pass
-        if os.path.isdir(self.directory):
-            shutil.rmtree(self.directory)
+            except OSError as exc:
+                failed = failed or exc.errno
+        try:
+            if os.path.isdir(self.directory):
+                shutil.rmtree(self.directory)
+        except OSError as exc:
+            failed = failed or exc.errno
+        if failed is not None or os.path.exists(self.directory):
+            raise OSError(failed, "could not delete a session photo") from None
 
 
 def _remove_tree(directory):
@@ -59,10 +73,18 @@ def make_session_factory(api_get_file, api_fetch, dest_dir, max_bytes):
     root = os.path.abspath(os.fspath(dest_dir))
 
     def session_factory(reference_file_id, candidate_file_id):
-        directory = tempfile.mkdtemp(prefix=SESSION_PREFIX, dir=root)   # 0o700
+        directory = os.path.abspath(tempfile.mkdtemp(prefix=SESSION_PREFIX, dir=root))   # 0o700
         try:
             reference = download(api_get_file, api_fetch, reference_file_id, directory, max_bytes)
             candidate = download(api_get_file, api_fetch, candidate_file_id, directory, max_bytes)
+            for path in (reference, candidate):
+                if os.path.dirname(os.path.abspath(path)) != directory:
+                    # Defence in depth: whatever download returned must sit in our directory.
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    raise OSError(errno.EINVAL, "download returned a path outside the session")
         except BaseException:
             _remove_tree(directory)
             raise

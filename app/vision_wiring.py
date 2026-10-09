@@ -204,9 +204,11 @@ class CheckGate:
             return result
         return guarded
 
-    def settle(self, ticket, status):
+    def settle(self, ticket, status, refused=False):
         """Charge the free-check counter on MATCH/MISMATCH only; always close the reservation,
-        even when charge() raises a BaseException (WP-BOT-10 review, WP-BOT-12 3a)."""
+        even when charge() raises a BaseException (WP-BOT-10 review, WP-BOT-12 3a).
+        An image refused before any call (refused=True) is not an uncharged check for the
+        daily limit (WP-BOT-14 1c): the seller only has to send another file."""
         try:
             try:
                 if status in CHARGED:
@@ -214,7 +216,7 @@ class CheckGate:
             except Exception:
                 log.error("check_counter_error code=CHARGE")
             try:
-                if status not in CHARGED:
+                if status not in CHARGED and not refused:
                     self._count_uncharged(ticket.user_id)
             except Exception:
                 log.error("check_gate_error code=UNCHARGED_COUNT")

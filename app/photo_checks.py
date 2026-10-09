@@ -13,6 +13,7 @@ import pathlib
 import time
 
 from app.intake import pairing
+from app.intake.download import TooLarge
 from app.photo_compare import run_bot_pair
 from app.verdict_notes import format_notes
 
@@ -101,9 +102,14 @@ class PhotoChecks:
                 # Nothing was downloaded and no provider is called.
                 return text[refusal]
         status = None
+        refused = False
         try:
             try:
                 session = self.session_factory(action['real'], action['generated'])
+            except TooLarge:
+                # Declared or streamed over the byte cap: refused, not a failure of ours.
+                refused = True
+                return text['image_too_large']
             except Exception:
                 return text['UNAVAILABLE']
             # Cleanup errors intentionally escape, so the bot publishes no verdict.
@@ -114,9 +120,11 @@ class PhotoChecks:
                 return seen[-1]
             result = run_bot_pair(session, compare, self.logger)
             status = result['status']
+            refused = (status == 'UNAVAILABLE' and bool(seen) and isinstance(seen[0], dict)
+                       and seen[0].get('reason') in IMAGE_REASONS)
         finally:
             if ticket is not None:
-                self.gate.settle(ticket, status)
+                self.gate.settle(ticket, status, refused=refused)
         reply = text[status]
         if (status == 'UNAVAILABLE' and seen and isinstance(seen[0], dict)
                 and seen[0].get('reason') in IMAGE_REASONS):

@@ -260,3 +260,56 @@ class RefusedImageInTheBot(WiringBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OversizedDocumentTests(WiringBase):
+    """WP-BOT-14 1b / 1c: a document over the byte cap gets image_too_large and is not
+    an uncharged check for the daily limit."""
+    BIG = vision_request.MAX_IMAGE_BYTES + 1
+
+    def oversize(self, streamed):
+        data = JPEG
+        if streamed:
+            # getFile says nothing about the size; the cap trips while streaming.
+            self.telegram.get_file = lambda fid: {"file_id": fid, "file_path": "photos/" + fid}
+            self.telegram.fetch = lambda fp: iter([b"\0" * (self.BIG // 2), b"\0" * (self.BIG // 2 + 1)])
+        else:
+            data = b"\0" * self.BIG
+        return patch.dict("tests.test_bot_wiring.FILES", {"huge-doc": data})
+
+    def test_over_cap_document_gets_image_too_large_declared_and_streamed(self):
+        for lang in ("ru", "en"):
+            for streamed in (False, True):
+                self.fresh()
+                with self.subTest(lang=lang, streamed=streamed), self.oversize(streamed):
+                    model = FakeModel(usage={"cost": 0.004})
+                    checks = self.build(lambda environ, **hooks: chain(model, environ, **hooks))
+                    sent = self.run_updates(checks, update(USER, lang, photo="gen-file-id-1"),
+                                            document(USER, lang, "huge-doc", self.BIG))
+                    self.assertEqual(sent[1], TEXTS[lang]["image_too_large"])
+                    self.assertEqual(model.requests, [])
+                    self.assertEqual(self.used(checks), 0)
+                    self.assertEqual(self.holds(), {})
+                    self.assertEqual(os.listdir(self.photo_dir), [])
+
+    def test_eleven_oversized_documents_do_not_hit_the_uncharged_limit(self):
+        with self.oversize(False):
+            model = FakeModel(usage={"cost": 0.004})
+            checks = self.build(lambda environ, **hooks: chain(model, environ, **hooks))
+            for _ in range(11):
+                sent = self.run_updates(checks, update(USER, "ru", photo="gen-file-id-1"),
+                                        document(USER, "ru", "huge-doc", self.BIG))
+                self.assertEqual(sent[1], TEXTS["ru"]["image_too_large"])
+            self.assertNotEqual(self.pair(checks)[1], TEXTS["ru"]["uncharged_limit"])
+
+    def test_eleven_refused_side_documents_do_not_hit_the_uncharged_limit(self):
+        data = png(2048, 1536, b"x")
+        with patch.dict("tests.test_bot_wiring.FILES", {"big-doc": data}):
+            model = FakeModel(usage={"cost": 0.004})
+            checks = self.build(lambda environ, **hooks: chain(model, environ, **hooks))
+            for _ in range(11):
+                with self.assertLogs("vision", "WARNING"):
+                    sent = self.run_updates(checks, update(USER, "ru", photo="gen-file-id-1"),
+                                            document(USER, "ru", "big-doc", len(data)))
+                self.assertEqual(sent[1], TEXTS["ru"]["image_too_large"])
+            self.assertNotEqual(self.pair(checks)[1], TEXTS["ru"]["uncharged_limit"])
