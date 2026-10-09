@@ -14,7 +14,8 @@ when k > 0. With --gate the manifest is validated first (app.controls_gate: at l
 positive and 20 different rows, licence on every different row; invalid -> exit 2 before any
 provider call) and the run passes only if positive MATCH >= 90% and negative MISMATCH >= 90%
 (UNAVAILABLE counts against both): prints CONTROLS PASS (exit 0) or CONTROLS FAIL (exit 1).
-A recrop row whose cand equals ref is refused (exit 2) in both modes.
+A recrop row whose cand equals ref is refused (exit 2): by validate_manifest under --gate,
+by a row check in default mode.
 Prints nothing but counts and kinds: no paths, bytes or model text.
 """
 import json
@@ -88,7 +89,7 @@ def _main(argv, environ, compare=None, read=None):
         except controls_gate.ManifestError as e:
             print("manifest refused: %s" % e)  # row index and fixed code only
             return 2
-    if any(isinstance(r, dict) and r.get("kind") == "recrop" and r.get("cand") in (None, "", r.get("ref"))
+    if not gate and any(isinstance(r, dict) and r.get("kind") == "recrop" and r.get("cand") in (None, "", r.get("ref"))
            for r in rows):
         print("manifest refused: RECROP_SAME_FILE")
         return 2

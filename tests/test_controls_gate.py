@@ -1,4 +1,4 @@
-"""test_controls_gate.py v1 - SPDX-License-Identifier: MIT - author zenith-claude"""
+"""test_controls_gate.py v2 - SPDX-License-Identifier: MIT - author zenith-claude"""
 import unittest
 from app.controls_gate import ManifestError, validate_manifest, gate, format_report
 
@@ -14,7 +14,7 @@ def manifest(pos=20, neg=20):
     return rows
 
 
-def runs(match, pos_n, mismatch, neg_n, pos_other='NEEDS_REVIEW', neg_other='MATCH'):
+def runs(match, pos_n, mismatch, neg_n, pos_other='NEEDS_REVIEW', neg_other='NEEDS_REVIEW'):
     out = [('same' if i % 2 else 'recrop', 'MATCH') for i in range(match)]
     out += [('same', pos_other)] * (pos_n - match)
     out += [('different', 'MISMATCH')] * mismatch
@@ -45,6 +45,10 @@ class Manifest(unittest.TestCase):
         self.bad(m, 'LICENCE_REQUIRED')
         m = manifest(); m[-1]['cand'] = m[-1]['ref']
         self.bad(m, 'DIFFERENT_SAME_FILE')
+
+    def test_recrop_same_file(self):
+        m = manifest(); m[10]['cand'] = m[10]['ref']
+        self.bad(m, 'RECROP_SAME_FILE')
 
     def test_shape(self):
         self.bad('rows', 'NOT_A_LIST')
@@ -94,6 +98,21 @@ class Gate(unittest.TestCase):
         self.assertEqual(r['positive']['UNAVAILABLE'], 3)
         self.assertEqual(r['failing'], ['positive', 'negative'])
 
+    def test_false_match(self):
+        r = gate(runs(20, 20, 19, 20, neg_other='MATCH'))
+        self.assertFalse(r['pass'])
+        self.assertEqual(r['failing'], ['false_match'])
+        self.assertEqual(r['negative']['MATCH'], 1)
+        r = gate(runs(20, 20, 17, 20, neg_other='MATCH'))
+        self.assertEqual(r['failing'], ['negative', 'false_match'])
+        r = gate(runs(17, 20, 39, 40, neg_other='MATCH'))
+        self.assertEqual(r['failing'], ['positive', 'false_match'])
+        # the other non-MISMATCH statuses stay inside the 90 percent bar
+        for other in ('NEEDS_REVIEW', 'UNAVAILABLE'):
+            self.assertTrue(gate(runs(20, 20, 18, 20, neg_other=other))['pass'])
+        # a MATCH on the positive side is never a false match
+        self.assertEqual(gate(runs(20, 20, 20, 20))['failing'], [])
+
     def test_6_bad_input(self):
         for item in (('same', 'OK'), ('same', None), ('twin', 'MATCH'),
                      ('same',), 'ab', 5, (['same'], 'MATCH')):
@@ -129,6 +148,8 @@ class Report(unittest.TestCase):
         lines = format_report(gate([])).splitlines()
         self.assertIn('n/a', lines[0])
         self.assertEqual(lines[-1], 'CONTROLS FAIL: positive, negative')
+        lines = format_report(gate(runs(20, 20, 19, 20, neg_other='MATCH'))).splitlines()
+        self.assertEqual(lines[-1], 'CONTROLS FAIL: false_match')
 
     def test_percent_floors(self):
         self.assertIn('MATCH 26 (89.6%)', format_report(gate(runs(26, 29, 27, 30))))

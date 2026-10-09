@@ -67,7 +67,7 @@ class GateMode(unittest.TestCase):
         self.assertEqual(c.calls, 0)
 
     def test_boundary_passes(self):
-        c = Scripted(pos_bad=2, neg_bad=2)
+        c = Scripted(pos_bad=2, neg_bad=2, bad_neg="NEEDS_REVIEW")
         code, out = run(rows(), c)
         self.assertEqual(code, 0)
         self.assertEqual(c.calls, 40)
@@ -76,7 +76,13 @@ class GateMode(unittest.TestCase):
     def test_one_false_match_beyond_boundary_fails(self):
         code, out = run(rows(), Scripted(neg_bad=3))
         self.assertEqual(code, 1)
-        self.assertIn("CONTROLS FAIL: negative", out)
+        self.assertIn("CONTROLS FAIL: negative, false_match", out)
+
+    def test_false_match_alone_fails(self):
+        # 19 MISMATCH + 1 MATCH on 20 negatives is 95%, still a failure
+        code, out = run(rows(), Scripted(neg_bad=1))
+        self.assertEqual(code, 1)
+        self.assertTrue(out.rstrip().endswith("CONTROLS FAIL: false_match"))
 
     def test_positive_side_named_and_unavailable_counts(self):
         code, out = run(rows(), Scripted(pos_bad=3, bad_pos="UNAVAILABLE"))

@@ -141,7 +141,7 @@ VISION_...=... python3 -m app.vision_controls manifest.json --repeats 3 --gate
 keys; otherwise it prints the row index and a fixed code and exits 2 with zero calls. After the
 runs (repeats count as runs) it passes only if positive MATCH >= 90% and negative MISMATCH >= 90%;
 UNAVAILABLE counts against both sides. It prints one line per side and `CONTROLS PASS` (exit 0)
-or `CONTROLS FAIL: <sides>` (exit 1). A `recrop` row whose `cand` equals `ref` is refused (exit 2)
+or `CONTROLS FAIL: <sides>` (exit 1); sides are `positive`, `negative` and `false_match` (any MATCH on `different` rows fails the gate, even above 90%). A `recrop` row whose `cand` equals `ref` is refused (exit 2)
 in both modes. The output never contains paths, URLs or model text.
 
 ## Environment

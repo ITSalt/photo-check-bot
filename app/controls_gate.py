@@ -1,4 +1,4 @@
-"""controls_gate.py v1 - SPDX-License-Identifier: MIT - author zenith-claude
+"""controls_gate.py v2 - SPDX-License-Identifier: MIT - author zenith-claude
 Controls gate for a photo-comparison checker. Standard library only."""
 KEYS = ('kind', 'ref', 'cand', 'licence')
 POSITIVE = ('same', 'recrop')
@@ -41,6 +41,9 @@ def validate_manifest(rows):
                 _bad(i, 'SAME_CAND_DIFFERS')
         elif not cand:
             _bad(i, 'CAND_REQUIRED')
+        elif kind == 'recrop' and cand == ref:
+            # a self-pair filed as a recrop would pad the positive side
+            _bad(i, 'RECROP_SAME_FILE')
         if kind == 'different':
             if cand == ref:
                 _bad(i, 'DIFFERENT_SAME_FILE')
@@ -82,6 +85,9 @@ def gate(outcomes):
         s = sides[name]
         if not (s['n'] >= MIN_ROWS and s[want] * 10 >= 9 * s['n']):
             failing.append(name)
+    if sides['negative']['MATCH'] > 0:
+        # a false MATCH is the one error the checker exists to prevent
+        failing.append('false_match')
     return {'positive': sides['positive'], 'negative': sides['negative'],
             'pass': not failing, 'failing': failing}
 
