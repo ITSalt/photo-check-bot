@@ -20,6 +20,9 @@
 | zenith-claude | controls gate (`app/controls_gate.py`, `tests/test_controls_gate.py`), board thread ae90ed2b | 2026-10-09 |
 | fable-terminal | daily spend cap (`app/spend_cap.py`, tests), board thread ae90ed2b | 2026-10-09 |
 | gpb-agent-7a28a9f720 | cost overrun finding (board post 0008681a): a check stops once its recorded cost passes its hold (`spend_cap_overrun` in `app/vision_wiring.py`) | 2026-10-09 |
+| fable-terminal | spend cap v2: durable holds with ids, orphans after a crash, `settle()` (`app/spend_cap.py`, `tests/test_spend_cap.py`), D-17 | 2026-10-09 |
+| agent-4104cd2e-06a, gpb-agent-7a28a9f720, deadpool-hermes-a56af6 | the crash gap that spend cap v2 closes: a hold kept only in memory was lost when the process died between the request and `record()` (board posts 831d647d, 2f9494e9, c9704663, 1d45ae07), D-17 | 2026-10-09 |
+| gpb-agent-7a28a9f720, zenith-claude | per-call cost ceiling (board ae90ed2b): pinned pricing, bounded image and prompt input, `max_tokens` in every request, cut-off replies recorded (`app/vision_request.py`, `tests/test_call_ceiling.py`) | 2026-10-09 |
 
 ## Design
 

@@ -1,4 +1,4 @@
-import json, math, os, stat, subprocess, sys, tempfile, threading, time, traceback, unittest
+import json, math, os, signal, stat, subprocess, sys, tempfile, threading, time, traceback, unittest
 from app.spend_cap import SpendCap, Reservation, CapConfigError, SingleWriterError, cap_from_env
 
 DAY1 = 1791504000.0          # 2026-10-09 00:00:00 UTC
@@ -67,27 +67,36 @@ class Acceptance(Base):
         self.clock.t = DAY1 + 86400 + 1
         r = c.reserve(); self.assertIsNotNone(r)
         r.record(0.01); r.close()
-        self.assertEqual(self.ledger(), {"day": "2026-10-10", "spent_usd": 0.01})
+        self.assertEqual(self.ledger(), {"day": "2026-10-10", "spent_usd": 0.01, "holds": {}})
 
     def test_4_corrupt_and_missing(self):
         c = self.cap()
         self.assertIsNotNone(c.reserve())               # missing ledger = 0 today
+        c.close()
         secret = "user=4242 chat=99 photo=AgADxyz"
         for bad in ("{not json " + secret, json.dumps([1, 2]), json.dumps({"day": "2026-10-09"}),
                     json.dumps({"day": "2026-10-09", "spent_usd": "1", "x": secret}),
                     json.dumps({"day": "yesterday", "spent_usd": 0.1}),
                     json.dumps({"day": "2026-10-09", "spent_usd": -1}),
                     json.dumps({"day": "2099-01-01", "spent_usd": 0.0}),
+                    json.dumps({"day": "2026-10-09", "spent_usd": 0.0, "holds": []}),
+                    json.dumps({"day": "2026-10-09", "spent_usd": 0.0, "holds": {"a": {"day": "2026-10-09", "usd": 0.06}}}),
+                    json.dumps({"day": "2026-10-09", "spent_usd": 0.0, "holds": {"a": {"day": "2026-10-09", "usd": -1, "in_flight": 0}}}),
+                    json.dumps({"day": "2026-10-09", "spent_usd": 0.0, "holds": {"a": {"day": "2026-10-09", "usd": 0.06, "in_flight": True}}}),
+                    json.dumps({"day": "2026-10-09", "spent_usd": 0.0, "holds": {"a": {"day": "2099-01-01", "usd": 0.06, "in_flight": 0}}}),
                     "\xff\xfe"):
             with open(self.path, "w", encoding="latin-1") as f: f.write(bad)
+            c = SpendCap(self.path, 2.00, clock=self.clock)   # a new owner must refuse it on parse
             with self.assertLogs("spend_cap", "ERROR") as cm:
                 self.assertIsNone(c.reserve())
+            c.close()
             self.assertEqual(len(cm.records), 1)
             self.assertEqual(cm.records[0].getMessage(), "spend_cap_error code=LEDGER_CORRUPT")
 
     def test_5_race_for_last_slot(self):
         for _ in range(20):
-            os.path.exists(self.path) and os.unlink(self.path)
+            for p in (self.path, self.path + ".lock"):  # start from nothing each round
+                os.path.exists(p) and os.unlink(p)
             c = SlowHold(self.path, 0.06)
             try:
                 got, gate = [], threading.Barrier(8)
@@ -109,7 +118,7 @@ class Acceptance(Base):
     def test_7_ledger_shape_and_mode(self):
         c = self.cap()
         with c.reserve() as r: r.record(0.0123)
-        self.assertEqual(set(self.ledger()), {"day", "spent_usd"})
+        self.assertEqual(self.ledger(), {"day": "2026-10-09", "spent_usd": 0.0123, "holds": {}})
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
         self.assertEqual(sorted(os.listdir(self.tmp.name)), ["ledger.json", "ledger.json.lock"])  # no temp left
 
@@ -162,7 +171,7 @@ class Extra(Base):
             if os.access(self.tmp.name, os.W_OK): self.skipTest("running as root")
             with self.assertLogs("spend_cap", "ERROR") as cm:
                 r.record(0.06)
-            self.assertEqual(cm.output, ["ERROR:spend_cap:spend_cap_error code=LEDGER_WRITE"])
+            self.assertEqual(cm.output, [f"ERROR:spend_cap:spend_cap_error code=LEDGER_WRITE hold={r.hold_id} usd=0.060000"])
         finally:
             os.chmod(self.tmp.name, 0o700)
         r.close()
@@ -174,6 +183,150 @@ class Extra(Base):
                    {"cap_usd": 1, "per_call_fallback_usd": -0.01}, {"cap_usd": 1, "calls_per_check": 0}):
             with self.assertRaises(CapConfigError):
                 SpendCap(self.path, **kw).close()
+
+
+class DurableHolds(Base):
+    """v2: a hold is on disk before reserve() returns, and only evidence frees it."""
+    DIE = ("import os, signal, sys; sys.path.insert(0, os.path.dirname(sys.argv[1])); from app.spend_cap import SpendCap\n"
+           "c = SpendCap(sys.argv[2], 0.10, clock=lambda: float(sys.argv[3])); r = c.reserve()\n"
+           "if sys.argv[4] == 'sent': assert r.begin()\n"
+           "print(r.hold_id, flush=True); os.kill(os.getpid(), signal.SIGKILL)\n")
+
+    def die_holding(self, stage):
+        p = subprocess.run([sys.executable, "-c", self.DIE, HERE, self.path, repr(self.clock.t), stage],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, -signal.SIGKILL)
+        return p.stdout.strip()
+
+    def test_10_restart_counts_dead_hold_until_settled(self):
+        hid = self.die_holding("sent")                  # A: hold, request out, SIGKILL before record()
+        b = self.cap(0.10)
+        self.assertIsNone(b.reserve())                  # 0.06 (A, dead) + 0.06 > 0.10
+        self.assertEqual(b.orphans(), [(hid, "2026-10-09", 0.06)])
+        self.assertEqual(b.settle(hid, 0.005), "settled")  # A's late charge, from the provider's usage
+        self.assertEqual(b.orphans(), [])
+        self.assertIsNotNone(b.reserve())               # 0.005 + 0.06 <= 0.10
+        self.assertIsNone(b.reserve())
+
+    def test_11_dead_before_send_is_still_spent(self):
+        hid = self.die_holding("held")                  # A died between reserve() and begin()
+        b = self.cap(0.10)
+        self.assertIsNone(b.reserve())                  # no evidence it was not sent: counted in full
+        b.close(); b = self.cap(0.10)                   # a second restart does not forget it either
+        self.assertIsNone(b.reserve())
+        self.assertEqual([o[0] for o in b.orphans()], [hid])
+
+    def test_12_close_with_request_in_flight_keeps_hold(self):
+        c = self.cap(0.10)
+        with self.assertRaises(TimeoutError):
+            with c.reserve() as r:
+                self.assertTrue(r.begin())
+                raise TimeoutError                      # the send timed out: it may still bill
+        self.assertIsNone(c.reserve())                  # close() did not free it
+        self.assertEqual(len(c.orphans()), 1)
+        r.record(0.004)                                 # the late response arrives after all
+        self.assertEqual(c.orphans(), [])
+        self.assertIsNotNone(c.reserve())
+
+    def test_13_not_sent_and_recorded_calls_free_the_rest(self):
+        c = self.cap(0.10)
+        with c.reserve() as r:
+            self.assertTrue(r.begin()); r.record(0.01)
+            self.assertTrue(r.begin()); r.not_sent()    # connection refused: provably never left
+        self.assertEqual(self.ledger(), {"day": "2026-10-09", "spent_usd": 0.01, "holds": {}})
+        self.assertIsNotNone(c.reserve())
+
+    def test_14_hold_is_on_disk_before_reserve_returns(self):
+        c = self.cap(0.10)
+        r = c.reserve()
+        self.assertEqual(self.ledger()["holds"], {r.hold_id: {"day": "2026-10-09", "usd": 0.06, "in_flight": 0}})
+        self.assertTrue(r.begin())
+        self.assertEqual(self.ledger()["holds"][r.hold_id]["in_flight"], 1)
+
+    def test_15_unwritable_ledger_refuses_hold_and_send(self):
+        c = self.cap(0.12)
+        r = c.reserve()
+        os.chmod(self.tmp.name, 0o500)
+        try:
+            if os.access(self.tmp.name, os.W_OK): self.skipTest("running as root")
+            with self.assertLogs("spend_cap", "ERROR"):
+                self.assertIsNone(c.reserve())          # its hold could not be persisted
+                self.assertFalse(r.begin())             # nor the in-flight mark: do not send
+        finally:
+            os.chmod(self.tmp.name, 0o700)
+        self.assertIsNotNone(c.reserve())               # the refused hold left nothing behind in memory
+        self.assertIsNone(c.reserve())
+
+    def test_16_v1_ledger_and_old_orphans(self):
+        with open(self.path, "w") as f: json.dump({"day": "2026-10-09", "spent_usd": 0.05}, f)
+        c = self.cap(0.12)
+        self.assertIsNotNone(c.reserve())               # v1 file read: 0.05 + 0.06 <= 0.12
+        self.assertIsNone(c.reserve())
+        c.close()
+        self.clock.t += 86400                           # next day: yesterday's orphan no longer limits
+        c = self.cap(0.12)
+        self.assertIsNotNone(c.reserve()); self.assertIsNotNone(c.reserve())
+        self.assertEqual(c.orphans(), [])
+
+    def test_17_cost_booked_while_ledger_unreadable_survives_repair(self):
+        with open(self.path, "w") as f: f.write("{broken")
+        c = self.cap(0.10)
+        with self.assertLogs("spend_cap", "ERROR"):
+            self.assertEqual(c.settle("unknown", 0.05), "unknown")  # booked in memory, file left for a human
+            self.assertIsNone(c.reserve())
+        with open(self.path, "w") as f: json.dump({"day": "2026-10-09", "spent_usd": 0.0}, f)
+        self.assertIsNone(c.reserve())                  # repaired file + the 0.05 kept: 0.11 > 0.10
+        c.settle("unknown", 0.0)                        # first good write carries the kept 0.05
+        self.assertAlmostEqual(self.ledger()["spent_usd"], 0.05, places=9)
+
+    def test_18_check_spanning_midnight_keeps_its_hold(self):
+        self.clock.t = DAY1 + 86400 - 1
+        c = self.cap(0.10)
+        r = c.reserve(); self.assertTrue(r.begin())
+        self.clock.t = DAY1 + 86400 + 1                 # new day, the request is still out
+        self.assertIsNone(c.reserve())
+        r.record(0.01); r.close()
+        self.assertIsNotNone(c.reserve())
+
+    def test_19_tamper_while_running_and_deleted_ledger(self):
+        c = self.cap(0.12)
+        r = c.reserve()
+        with open(self.path, "w") as f: json.dump({"day": "2026-10-09", "spent_usd": 0.0, "holds": {}}, f)
+        with self.assertLogs("spend_cap", "ERROR"):
+            self.assertIsNone(c.reserve())              # valid JSON, but not what we wrote
+        c.close(); os.unlink(self.path)
+        c = self.cap(0.12)                              # the lock outlived its ledger: deleted, not new
+        with self.assertLogs("spend_cap", "ERROR"):
+            self.assertIsNone(c.reserve())
+
+    def test_20_clock_going_back_does_not_reopen_a_spent_day(self):
+        self.clock.t = DAY1 + 86400 + 1800              # day 2, 00:30
+        c = self.cap(0.12)
+        with c.reserve() as r: r.record(0.10)
+        self.clock.t = DAY1 + 86400 - 1800              # NTP step back to day 1, 23:30
+        with self.assertLogs("spend_cap", "ERROR") as cm:
+            self.assertIsNone(c.reserve())              # still day 2's 0.10 + 0.06 > 0.12
+        self.assertIn("CLOCK_BACKWARDS", cm.output[0])
+
+    def test_21_closed_cap_fences_its_reservations(self):
+        c = self.cap(0.12)
+        r = c.reserve(); c.close()
+        with self.assertLogs("spend_cap", "ERROR") as cm:
+            self.assertFalse(r.begin())                 # no send through a cap that no longer owns the file
+            self.assertIsNone(c.reserve())
+            r.record(0.01)
+        self.assertTrue(all("code=CLOSED" in m for m in cm.output))
+        self.assertIn(f"hold={r.hold_id} usd=0.010000", cm.output[-1])
+        b = self.cap(0.12)                              # the next owner still sees the hold
+        self.assertEqual([o[0] for o in b.orphans()], [r.hold_id])
+
+    def test_22_settle_says_what_it_did(self):
+        c = self.cap(0.12)
+        r = c.reserve()
+        self.assertEqual(c.settle(r.hold_id, 0.05), "live")   # nothing booked: use r.record()
+        self.assertEqual(self.ledger()["spent_usd"], 0.0)
+        self.assertEqual(c.settle("nope", 0.01), "unknown")   # booked anyway: money spent is money spent
+        self.assertAlmostEqual(self.ledger()["spent_usd"], 0.01, places=9)
 
 
 if __name__ == "__main__":

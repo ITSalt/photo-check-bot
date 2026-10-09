@@ -102,6 +102,19 @@ def _cost(body):
 
 
 OVERRUN = "SPEND_CAP_OVERRUN"
+BEGIN = "SPEND_CAP_BEGIN"
+
+
+def _hook(hook, where):
+    """Run a pre-send hook; True when the request may leave (no hook: True). A hook that
+    returns False or raises stops the chain before the send (fail closed)."""
+    if hook is None:
+        return True
+    try:
+        return hook() is not False
+    except Exception:
+        log.error("spend_cap_error code=HOOK stage=%s", where)
+        return False
 
 
 def _report(on_call, cost):
@@ -119,7 +132,8 @@ def _report(on_call, cost):
         return False
 
 
-def make_compare(config, environ, call_provider, core, transport=None, on_call=None):
+def make_compare(config, environ, call_provider, core, transport=None, on_call=None,
+                 on_begin=None, on_not_sent=None):
     """compare(reference, candidate) -> the vision_core.assess dict, or {"status": "UNAVAILABLE"}.
 
     Never raises ProviderUnavailable: any provider failure (MISSING_KEY, TIMEOUT,
@@ -133,6 +147,12 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
     attempted: cost is the reply's usage.cost, or None when the call failed or the
     reply has no usable cost (the cap then counts its fallback). If it returns False
     the remaining calls are skipped and the check ends UNAVAILABLE (OVERRUN).
+
+    `on_begin()` (optional, spend cap v2) runs before every provider call: it marks the
+    request as leaving on the ledger. False (or raising) -> no send, the check ends
+    UNAVAILABLE (BEGIN). `on_not_sent()` replaces on_call(None) only when call_provider
+    failed before the transport was invoked (e.g. MISSING_KEY): only then is it proven
+    that nothing left. Any failure after the transport was entered counts the fallback.
     """
     if transport is None:
         transport = make_transport(config["base_url"], config["timeout"],
@@ -140,10 +160,21 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
     model = config["model"]
 
     def ask(stage, request):
+        if not _hook(on_begin, stage):
+            raise ProviderUnavailable(BEGIN)     # nothing sent, nothing to record
+        entered = []
+
+        def counted(*args):
+            entered.append(True)                 # from here on the request may have left
+            return transport(*args)
+
         try:
-            body = call_provider(request, transport, environ, _provider_sink)
+            body = call_provider(request, counted, environ, _provider_sink)
         except BaseException:
-            _report(on_call, None)   # the call may still be billed: count the fallback
+            if entered or on_not_sent is None:
+                _report(on_call, None)   # the call may still be billed: count the fallback
+            else:
+                _hook(on_not_sent, stage)   # provably never left
             raise
         _log_usage(model, stage, body)
         if not _report(on_call, _cost(body)):
@@ -192,7 +223,8 @@ def _default_core():
     return vision_core
 
 
-def compare_from_env(environ, *, transport=None, core=None, on_call=None):
+def compare_from_env(environ, *, transport=None, core=None, on_call=None, on_begin=None,
+                     on_not_sent=None):
     """The compare callable, or None (not configured, or T3b / the T2 core unavailable).
 
     Every provider call goes through core_t3's call_provider; it is not injectable,
@@ -209,7 +241,8 @@ def compare_from_env(environ, *, transport=None, core=None, on_call=None):
     if core is None:
         log.warning("vision disabled, T2 core unavailable")
         return None
-    return make_compare(config, environ, call_provider, core, transport, on_call)
+    return make_compare(config, environ, call_provider, core, transport, on_call,
+                        on_begin, on_not_sent)
 
 
 def _main(argv, environ):

@@ -1,13 +1,21 @@
-"""Daily spend cap for a vision-API bot. Python 3.12, standard library only.
+"""Daily spend cap for a vision-API bot, v2: holds are durable. Python 3.12, standard library only.
 
-Money is kept as integer micro-dollars inside, so 33 holds of 0.06 are exactly 1.98
-and the 34th is refused without float drift. The ledger file holds recorded costs only;
-holds of open reservations live in memory. One process owns the ledger: the constructor
-takes a non-blocking flock on <path>.lock and keeps it until close().
+Money is integer micro-dollars inside. One process owns the ledger (non-blocking flock on
+<path>.lock, kept until close()). Every hold is written to the ledger, atomically, before
+reserve() returns it, so no request can leave before its liability is on disk.
 
-Fails closed: an unreadable ledger, a failed write or any internal error means reserve()
-returns None, and a cost that could not be written stays counted in memory."""
-import fcntl, json, logging, math, os, tempfile, threading, time, datetime as _dt
+A hold is freed only by evidence:
+- record(cost) books a real charge (the hold shrinks by it);
+- close() frees what is left only if no request is in flight (every begin() matched by a
+  record() or a not_sent()); otherwise the hold stays on the ledger as an orphan;
+- a hold found on the ledger when a new SpendCap starts is an orphan: counted in full for
+  the day it was taken, until settle(hold_id, cost) books the real charge for it.
+A live hold counts until it is freed, even past midnight; an orphan stops counting the next day.
+Fails closed: an unreadable, changed or deleted ledger, a clock that went back past the ledger's day,
+a closed SpendCap, a failed write or any internal error means reserve() returns None and begin()
+returns False. Costs that could not be written stay counted in memory and are logged with the hold
+id and amount. To start from nothing, delete both <path> and <path>.lock."""
+import fcntl, json, logging, math, os, tempfile, threading, time, uuid, datetime as _dt
 
 log = logging.getLogger("spend_cap")
 _M = 1_000_000                                  # micro-dollars per dollar
@@ -35,6 +43,18 @@ def _money(x):
     return round(x * _M)
 
 
+def _day(s):
+    if not isinstance(s, str):
+        raise _LedgerCorrupt
+    try:
+        d = _dt.date.fromisoformat(s).isoformat()
+    except ValueError:
+        raise _LedgerCorrupt from None
+    if d != s:
+        raise _LedgerCorrupt
+    return d
+
+
 def cap_from_env(environ):
     raw = environ.get("VISION_DAILY_CAP_USD")
     if raw is None or raw.strip() == "":
@@ -46,6 +66,13 @@ def cap_from_env(environ):
     if not math.isfinite(v) or v < 0:
         raise CapConfigError("VISION_DAILY_CAP_USD must be a finite number >= 0")
     return v
+
+
+class _Hold:
+    __slots__ = ("id", "day", "left", "in_flight", "orphan")
+
+    def __init__(self, hid, day, left, in_flight=0, orphan=False):
+        self.id, self.day, self.left, self.in_flight, self.orphan = hid, day, left, in_flight, orphan
 
 
 class SpendCap:
@@ -61,9 +88,11 @@ class SpendCap:
         self._cap, self._fallback, self._hold_size = cap, fb, fb * calls_per_check
         self._clock = clock
         self._lock = threading.Lock()
-        self._held = 0                           # open holds, micro-dollars
-        self._unwritten = 0                      # recorded today but not yet on disk
-        self._unwritten_day = None
+        self._closed = False
+        self._loaded = False                     # memory mirrors the ledger once loaded
+        self._day, self._spent, self._holds = None, 0, {}
+        self._on_disk = None                     # bytes of our last good write (or of the file we loaded)
+        fresh = not os.path.exists(self._path + ".lock")
         try:
             self._lock_fd = os.open(self._path + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
         except OSError:
@@ -74,10 +103,20 @@ class SpendCap:
             os.close(self._lock_fd)
             self._lock_fd = None
             raise SingleWriterError("another process holds the spend cap") from None
+        self._fresh = fresh and not os.path.exists(self._path)
+        if self._fresh:                          # write the ledger now: from here on a missing one means deleted
+            try:
+                with self._lock:
+                    self._change(lambda today: None, must_persist=True)
+            except Exception:
+                self.close()
+                raise CapConfigError("cannot write the spend cap ledger") from None
 
     # -- single-writer lock
     def close(self):
+        """Release the flock. Open holds stay on the ledger: the next owner counts them as orphans."""
         with self._lock:
+            self._closed = True                  # every later operation fails closed
             if self._lock_fd is not None:
                 fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
                 os.close(self._lock_fd)
@@ -94,93 +133,233 @@ class SpendCap:
     def _today(self):
         return _dt.datetime.fromtimestamp(self._clock(), _dt.timezone.utc).date().isoformat()
 
-    def _read_spent(self, today):
+    def _parse(self, raw, today):
         try:
-            with open(self._path, "rb") as f:
-                data = json.loads(f.read().decode("utf-8"))
-        except FileNotFoundError:
-            return 0
-        except (OSError, ValueError):
-            raise _LedgerCorrupt from None
-        if not isinstance(data, dict) or set(data) != {"day", "spent_usd"} or not isinstance(data["day"], str):
-            raise _LedgerCorrupt
-        spent = _money(data["spent_usd"])
-        try:
-            day = _dt.date.fromisoformat(data["day"]).isoformat()
+            data = json.loads(raw.decode("utf-8"))
         except ValueError:
             raise _LedgerCorrupt from None
-        if spent is None or day != data["day"] or day > today:   # a future day is not trusted
+        if not isinstance(data, dict) or set(data) not in ({"day", "spent_usd"}, {"day", "spent_usd", "holds"}):
+            raise _LedgerCorrupt                 # a v1 file (no "holds") is read as having none
+        day, spent = _day(data["day"]), _money(data["spent_usd"])
+        if spent is None or day > today:         # a future day is not trusted
             raise _LedgerCorrupt
-        return spent if day == today else 0
+        holds = {}
+        raw_holds = data.get("holds", {})
+        if not isinstance(raw_holds, dict):
+            raise _LedgerCorrupt
+        for hid, h in raw_holds.items():
+            if not isinstance(h, dict) or set(h) != {"day", "usd", "in_flight"}:
+                raise _LedgerCorrupt
+            hday, left, n = _day(h["day"]), _money(h["usd"]), h["in_flight"]
+            if left is None or hday > today or isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                raise _LedgerCorrupt
+            holds[hid] = _Hold(hid, hday, left, n, orphan=True)   # a previous owner's hold
+        return day, spent, holds
 
-    def _write(self, today, spent):
+    def _load(self, today):
+        """First use: read the ledger left by any previous owner. Later: check nobody changed it."""
+        try:
+            with open(self._path, "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            raw = None
+        except OSError:
+            raise _LedgerCorrupt from None
+        if self._loaded:
+            if raw != self._on_disk:
+                raise _LedgerCorrupt
+            return
+        if raw is None and not self._fresh:
+            raise _LedgerCorrupt                 # the lock file outlived its ledger: it was deleted
+        pend_day, pend = self._day, self._spent     # costs recorded while the ledger was unreadable
+        if raw is not None:
+            self._day, self._spent, self._holds = self._parse(raw, today)
+        self._on_disk, self._loaded = raw, True
+        if pend and pend_day == self._day:
+            self._spent += pend
+        elif pend and (raw is None or pend_day > self._day):
+            self._day, self._spent = pend_day, pend
+
+    def _roll(self, today):
+        if self._day != today:
+            self._day, self._spent = today, 0
+        for hid in [h.id for h in self._holds.values() if h.orphan and h.day < today]:
+            log.warning("spend_cap_orphan_expired hold=%s usd=%.6f", hid, self._holds[hid].left / _M)
+            del self._holds[hid]                 # an old day's orphan no longer limits today
+
+    def _total(self, today):
+        return self._spent + sum(h.left for h in self._holds.values())   # a check spanning midnight still counts
+
+    def _encode(self):
+        holds = {h.id: {"day": h.day, "usd": h.left / _M, "in_flight": h.in_flight} for h in self._holds.values()}
+        return json.dumps({"day": self._day, "spent_usd": self._spent / _M, "holds": holds}).encode("utf-8")
+
+    def _write(self):
+        raw = self._encode()
         d = os.path.dirname(self._path)
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".spend_cap.", suffix=".tmp")
         try:
             os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"day": today, "spent_usd": spent / _M}, f)
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self._path)
+            dfd = os.open(d, os.O_RDONLY)        # make the rename itself durable
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
         except BaseException:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
             raise
+        self._on_disk = raw
 
-    def _spent_today(self, today):
-        if self._unwritten_day != today:
-            self._unwritten, self._unwritten_day = 0, today
-        return self._read_spent(today) + self._unwritten
+    def _change(self, apply, must_persist, what=""):
+        """Load/verify, roll the day, apply a change to memory, write it. Returns apply()'s result.
+        must_persist: undo the change and raise if the write fails (reserve, begin).
+        what: hold id and amount, logged when a change stays in memory only."""
+        today = self._today()
+        code = None
+        if self._closed:
+            code = "CLOSED"
+        elif self._day is not None and today < self._day:
+            code, today = "CLOCK_BACKWARDS", self._day   # never let a clock step reopen a spent day
+        else:
+            try:
+                self._load(today)
+            except _LedgerCorrupt:
+                code = "LEDGER_CORRUPT"
+        if code:
+            log.error("spend_cap_error code=%s%s", code, what)
+            if must_persist:
+                raise _LedgerCorrupt
+            self._roll(today)
+            return apply(today)                  # keep the cost counted in memory; the file is left
+                                                 # untouched for a human to look at
+        self._roll(today)
+        undo = (self._day, self._spent, {k: _Hold(h.id, h.day, h.left, h.in_flight, h.orphan)
+                                          for k, h in self._holds.items()})
+        out = apply(today)
+        try:
+            self._write()
+        except OSError:
+            log.error("spend_cap_error code=LEDGER_WRITE%s", what)
+            if must_persist:
+                self._day, self._spent, self._holds = undo
+                raise
+        return out
 
     # -- public
     def reserve(self):
+        """A Reservation whose hold is already on disk, or None (cap reached, or any failure)."""
         try:
             with self._lock:
-                today = self._today()
+                def apply(today):
+                    if self._total(today) + self._hold_size > self._cap:
+                        return None
+                    h = _Hold(uuid.uuid4().hex, today, self._hold_size)
+                    self._holds[h.id] = h
+                    return h
                 try:
-                    spent = self._spent_today(today)
-                except _LedgerCorrupt:
-                    log.error("spend_cap_error code=LEDGER_CORRUPT")
+                    h = self._change(apply, must_persist=True)
+                except (_LedgerCorrupt, OSError):
                     return None
-                if spent + self._held + self._hold_size > self._cap:
-                    return None
-                self._held += self._hold_size
-                return Reservation(self, self._hold_size)
+                return None if h is None else Reservation(self, h.id)
         except Exception:
             log.error("spend_cap_error code=INTERNAL")
             return None
 
-    def _record(self, res, amount):
+    def orphans(self):
+        """[(hold_id, day, usd)] for holds left by a previous owner or closed with a request in flight."""
         with self._lock:
-            take = min(amount, res._left)
-            res._left -= take
-            self._held -= take
-            today = self._today()
-            try:
-                spent = self._spent_today(today) - self._unwritten
-            except _LedgerCorrupt:
-                log.error("spend_cap_error code=LEDGER_CORRUPT")
-                self._unwritten += amount        # keep it counted; reserve() refuses while corrupt anyway
-                return
-            try:
-                self._write(today, spent + self._unwritten + amount)
-                self._unwritten = 0
-            except OSError:
-                log.error("spend_cap_error code=LEDGER_WRITE")
-                self._unwritten += amount
+            if not self._loaded and not self._closed:
+                try:
+                    self._load(self._today())    # a new owner sees the old owner's holds before any reserve()
+                except _LedgerCorrupt:
+                    log.error("spend_cap_error code=LEDGER_CORRUPT")
+            return sorted((h.id, h.day, h.left / _M) for h in self._holds.values() if h.orphan)
 
-    def _release(self, res):
+    def settle(self, hold_id, cost_usd):
+        """Book the total real provider charge for an orphan hold (all its requests, from the provider's
+        usage records) and drop the hold. Bad costs count as the fallback. Never raises. Returns
+        "settled"; "unknown" (no such orphan, e.g. expired: the cost is still booked today); or
+        "live" (the hold belongs to an open Reservation: nothing booked, use its record())."""
+        amount = _money(cost_usd)
+        if amount is None:
+            amount = self._fallback
+        try:
+            with self._lock:
+                def apply(today):
+                    h = self._holds.get(hold_id)
+                    if h is not None and not h.orphan:
+                        return "live"
+                    self._spent += amount
+                    return "unknown" if self._holds.pop(hold_id, None) is None else "settled"
+                return self._change(apply, must_persist=False, what=f" hold={hold_id} usd={amount / _M:.6f}")
+        except Exception:
+            log.error("spend_cap_error code=INTERNAL hold=%s usd=%.6f", hold_id, amount / _M)
+            return "unknown"
+
+    def _begin(self, hid):
         with self._lock:
-            self._held -= res._left
-            res._left = 0
+            def apply(today):
+                h = self._holds.get(hid)
+                if h is None or h.orphan:
+                    return False
+                h.in_flight += 1
+                return True
+            try:
+                return self._change(apply, must_persist=True)
+            except (_LedgerCorrupt, OSError):
+                return False
+
+    def _record(self, hid, amount, sent):
+        with self._lock:
+            def apply(today):
+                self._spent += amount
+                h = self._holds.get(hid)
+                if h is None:
+                    return
+                h.left -= min(amount, h.left)
+                if sent and h.in_flight:
+                    h.in_flight -= 1
+                if h.orphan and h.in_flight == 0:   # closed early; its last request has now settled
+                    del self._holds[hid]
+            self._change(apply, must_persist=False, what=f" hold={hid} usd={amount / _M:.6f}")
+
+    def _release(self, hid):
+        with self._lock:
+            def apply(today):
+                h = self._holds.get(hid)
+                if h is None or h.orphan:
+                    return
+                if h.in_flight == 0:
+                    del self._holds[hid]
+                else:
+                    h.orphan = True                  # a request is out: its hold stays counted
+            self._change(apply, must_persist=False, what=f" hold={hid} close")
 
 
 class Reservation:
-    def __init__(self, cap, hold):
-        self._cap, self._left, self._closed = cap, hold, False
+    """Use: r = cap.reserve(); for each call: if not r.begin(): stop; send; r.record(cost).
+    If the send failed before any byte could reach the provider, call r.not_sent() instead."""
+
+    def __init__(self, cap, hold_id):
+        self._cap, self.hold_id, self._closed = cap, hold_id, False
+
+    def begin(self):
+        """Mark one request as leaving. Returns False (do not send) if that mark cannot be written."""
+        if self._closed:
+            return False
+        try:
+            return self._cap._begin(self.hold_id)
+        except Exception:
+            log.error("spend_cap_error code=INTERNAL")
+            return False
 
     def record(self, cost_usd):
         """Add a real provider cost to today's total. Bad costs count as the fallback. Never raises."""
@@ -188,14 +367,31 @@ class Reservation:
         if amount is None:
             amount = self._cap._fallback
         try:
-            self._cap._record(self, amount)
+            self._cap._record(self.hold_id, amount, sent=True)
+        except Exception:
+            log.error("spend_cap_error code=INTERNAL hold=%s usd=%.6f", self.hold_id, amount / _M)
+
+    def not_sent(self):
+        """The request marked by begin() provably never left (e.g. connection refused). Never raises."""
+        try:
+            with self._cap._lock:
+                def apply(today):
+                    h = self._cap._holds.get(self.hold_id)
+                    if h is not None and h.in_flight:
+                        h.in_flight -= 1
+                        if h.orphan and h.in_flight == 0:
+                            del self._cap._holds[self.hold_id]
+                self._cap._change(apply, must_persist=False, what=f" hold={self.hold_id} not_sent")
         except Exception:
             log.error("spend_cap_error code=INTERNAL")
 
     def close(self):
         if not self._closed:
             self._closed = True
-            self._cap._release(self)
+            try:
+                self._cap._release(self.hold_id)
+            except Exception:
+                log.error("spend_cap_error code=INTERNAL")
 
     def __enter__(self):
         return self
