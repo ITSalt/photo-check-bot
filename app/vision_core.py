@@ -7,8 +7,8 @@ Every decision about attributes and coverage is T2's. The only logic added here 
 `assess`, because T2 stops at per-attribute outcomes plus coverage and does not define
 the product-level status (see docs/t4-vision.md).
 
-Importing this module needs `core_t2/` on the path; the current Dockerfile ships
-`app/` only, so vision_compare treats an ImportError as "feature off".
+Importing this module needs `core_t2/` on the path (the Dockerfile ships it next to
+`app/`); vision_compare treats an ImportError as "feature off".
 """
 from core_t2 import photo_compare_t2_candidate as t2
 

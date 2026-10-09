@@ -1,7 +1,8 @@
 """T4 glue: the `compare(reference, candidate)` callable for run_bot_pair.
 
 inventory call -> two order-swapped compare calls -> T2 core (app/vision_core.py),
-each call through call_provider (T3b, injected). Enabled only by
+each call through the real T3b adapter
+core_t3.photo_compare_t3_candidate.call_provider (no other provider path). Enabled only by
 env config; compare_from_env returns None when it is missing, and the bot then
 keeps its current behaviour. Logs carry codes, model name and token/cost numbers
 only: no bytes, hashes, base64, keys, identifiers or provider text.
@@ -97,7 +98,9 @@ def estimate_check_cost(prompt_usd_per_m, output_usd_per_m, assumed=ASSUMED):
 def make_compare(config, environ, call_provider, core, transport=None):
     """compare(reference, candidate) -> the vision_core.assess dict, or {"status": "UNAVAILABLE"}.
 
-    Never raises ProviderUnavailable.
+    Never raises ProviderUnavailable: any provider failure (MISSING_KEY, TIMEOUT,
+    HTTP_ERROR, MALFORMED_BODY) ends the chain with UNAVAILABLE, no further call.
+    `call_provider` is the T3b adapter resolved by compare_from_env.
 
     `core` is the app.vision_core module (injected so a missing core_t2 disables
     the feature instead of breaking import).
@@ -149,17 +152,21 @@ def _default_call_provider():
 def _default_core():
     try:
         from app import vision_core
-    except ImportError:  # core_t2/ is not in the current image (Dockerfile copies app/)
+    except ImportError:  # core_t2/ missing from the path: the feature stays off
         return None
     return vision_core
 
 
-def compare_from_env(environ, *, call_provider=None, transport=None, core=None):
-    """The compare callable, or None (not configured, or T3b / the T2 core unavailable)."""
+def compare_from_env(environ, *, transport=None, core=None):
+    """The compare callable, or None (not configured, or T3b / the T2 core unavailable).
+
+    Every provider call goes through core_t3's call_provider; it is not injectable,
+    so production cannot run on a double. `transport` is for tests and the smoke run.
+    """
     config = load_config(environ)
     if config is None:
         return None
-    call_provider = call_provider or _default_call_provider()
+    call_provider = _default_call_provider()
     if call_provider is None:
         log.warning("vision disabled, call_provider unavailable")
         return None

@@ -1,8 +1,7 @@
 """T4 tests: fake transports only. No network, no keys.
 
-FakeCallProvider is a TEST DOUBLE of the T3b boundary (not the real call_provider,
-which board authors supply). It follows the public T3b contract: key from
-environ["VISION_API_KEY"] only, one transport call, typed ProviderUnavailable codes.
+Every chain test runs through the real T3b adapter
+(core_t3.photo_compare_t3_candidate.call_provider); only the transport is faked.
 """
 import json
 import logging
@@ -15,6 +14,7 @@ from app import vision_compare, vision_controls, vision_core, vision_request, vi
 from app.verdict_notes import REASON_RU, format_notes
 from app.vision_request import AnswerError, ImageRejected
 from core_t2 import photo_compare_t2_candidate as t2
+from core_t3 import photo_compare_t3_candidate as t3
 from app.vision_transport import TransportConfigError, make_transport
 
 JPEG = b"\xff\xd8\xff\xe0" + b"SECRETJPEGBYTES" * 4
@@ -24,22 +24,6 @@ KEY = "sk-top-secret-key"
 URL = "https://openrouter.ai/api/v1/chat/completions"
 ENV = {"VISION_BASE_URL": URL, "VISION_MODEL": "google/gemini-3.6-flash",
        "VISION_HOST_ALLOWLIST": "openrouter.ai", "VISION_API_KEY": KEY}
-
-
-def fake_call_provider(request, transport, environ, logger):
-    """TEST DOUBLE of T3b (see module docstring)."""
-    key = environ.get("VISION_API_KEY")
-    if not key:
-        raise ProviderUnavailable("MISSING_KEY")
-    try:
-        reply = transport(request, {"Authorization": "Bearer " + key}, 30)
-    except TimeoutError:
-        raise ProviderUnavailable("TIMEOUT") from None
-    if reply.get("status") != 200:
-        raise ProviderUnavailable("HTTP_ERROR")
-    if not isinstance(reply.get("body"), dict):
-        raise ProviderUnavailable("MALFORMED_BODY")
-    return reply["body"]
 
 
 class FakeResponse:
@@ -131,6 +115,8 @@ class RequestTests(unittest.TestCase):
         self.assertEqual((req["model"], req["temperature"]), ("m/x", 0))
         self.assertEqual(req["response_format"], {"type": "json_object"})
         self.assertEqual(req["reasoning"], {"effort": "minimal"})
+        self.assertEqual(req["provider"], {"data_collection": "deny"})
+        self.assertEqual(req["usage"], {"include": True})
         images = [p for p in parts_of(req) if p["type"] == "image_url"]
         self.assertEqual(len(images), 1)
         self.assertTrue(images[0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
@@ -144,6 +130,8 @@ class RequestTests(unittest.TestCase):
             self.assertEqual((req["model"], req["temperature"]), ("m/x", 0))
             self.assertEqual(req["response_format"], {"type": "json_object"})
             self.assertEqual(req["reasoning"], {"effort": "minimal"})
+            self.assertEqual(req["provider"], {"data_collection": "deny"})
+            self.assertEqual(req["usage"], {"include": True})
             self.assertEqual(sum(p["type"] == "image_url" for p in parts_of(req)), 2)
             text = parts_of(req)[0]["text"]
             for word in ("shape", "colour", "logo", "proportions", "background", "lighting", "angle"):
@@ -325,7 +313,7 @@ class AssessTests(unittest.TestCase):
         # A correct model reports no scene differences: nothing for code to turn into MISMATCH.
         for candidate in (PNG, PNG + b"other-background"):
             model = FakeModel()
-            compare = vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)
+            compare = vision_compare.compare_from_env(ENV, transport=model)
             self.assertEqual(compare(JPEG, candidate)["status"], "MATCH")
 
     def test_known_gap_scene_extra_is_prompt_only(self):
@@ -589,8 +577,8 @@ class ConfigTests(unittest.TestCase):
         self.assertIsNone(vision_compare.compare_from_env({}))
         for k in ("VISION_BASE_URL", "VISION_MODEL", "VISION_HOST_ALLOWLIST", "VISION_API_KEY"):
             env = {a: b for a, b in ENV.items() if a != k}
-            self.assertIsNone(vision_compare.compare_from_env(env, call_provider=fake_call_provider), k)
-            self.assertIsNone(vision_compare.compare_from_env({**ENV, k: "  "}, call_provider=fake_call_provider), k)
+            self.assertIsNone(vision_compare.compare_from_env(env), k)
+            self.assertIsNone(vision_compare.compare_from_env({**ENV, k: "  "}), k)
 
     def test_partial_warning_names_no_values(self):
         with self.assertLogs("vision", "WARNING") as logs:
@@ -612,11 +600,17 @@ class ConfigTests(unittest.TestCase):
         with patch.object(vision_compare, "_default_call_provider", return_value=None):
             self.assertIsNone(vision_compare.compare_from_env(ENV))
 
-    def test_default_resolves_repo_stub_which_fails_closed(self):
-        compare = vision_compare.compare_from_env(ENV, transport=lambda *a: self.fail("no network"))
+    def test_default_is_the_real_t3b_adapter(self):
+        self.assertIs(vision_compare._default_call_provider(), t3.call_provider)
+        compare = vision_compare.compare_from_env(ENV, transport=FakeModel())
         session = Session()
-        self.assertEqual(run_bot_pair(session, compare, None)["status"], "UNAVAILABLE")
+        self.assertEqual(run_bot_pair(session, compare, None),
+                         {"schema_version": "photo-bot-result/1", "status": "MATCH"})
         self.assertEqual(session.deleted, 1)
+
+    def test_no_injectable_call_provider(self):
+        with self.assertRaises(TypeError):
+            vision_compare.compare_from_env(ENV, call_provider=lambda *a: {})
 
     def test_bot_default_unchanged_without_config(self):
         import importlib, os
@@ -635,8 +629,8 @@ EXTRA = {"candidate_roi": BOX, "description": "extra pocket", "visibility_in_ref
 
 
 class ChainTests(unittest.TestCase):
-    def run_chain(self, model, env=ENV, call_provider=fake_call_provider):
-        compare = vision_compare.compare_from_env(env, call_provider=call_provider, transport=model)
+    def run_chain(self, model, env=ENV):
+        compare = vision_compare.compare_from_env(env, transport=model)
         session = Session()
         result = run_bot_pair(session, compare, None)
         self.assertEqual(session.deleted, 1)
@@ -681,6 +675,57 @@ class ChainTests(unittest.TestCase):
         for inv in ([], [{"attribute_id": "a"}], "x"):
             self.assertEqual(self.run_chain(FakeModel(inventory=inv)), "UNAVAILABLE")
 
+    def test_every_call_goes_through_core_t3_call_provider(self):
+        model = FakeModel()
+        with patch.object(t3, "call_provider", wraps=t3.call_provider) as spy:
+            self.assertEqual(self.run_chain(model), "MATCH")
+        self.assertEqual(spy.call_count, 3)
+        self.assertEqual([c.args[0] for c in spy.call_args_list], model.requests)
+        for c in spy.call_args_list:
+            self.assertEqual(len(c.args), 4)
+            self.assertIs(c.args[2], ENV)
+
+    def test_provider_failure_at_any_stage_is_unavailable_and_final(self):
+        for stage in (0, 1, 2):
+            for reply, code in (({"status": 503, "body": None}, "HTTP_ERROR"),
+                                ({"status": 200, "body": None}, "MALFORMED_BODY"),
+                                (TimeoutError(KEY), "TIMEOUT"), (ConnectionError(KEY), "HTTP_ERROR")):
+                raised = []
+
+                def recording(*args, _real=t3.call_provider):
+                    try:
+                        return _real(*args)
+                    except ProviderUnavailable as exc:
+                        raised.append(exc)
+                        raise
+                model = FakeModel(fail_at=stage, reply=reply)
+                with self.subTest(stage=stage, code=code), \
+                        patch.object(t3, "call_provider", side_effect=recording) as spy, \
+                        self.assertLogs("vision", "WARNING") as logs:
+                    self.assertEqual(self.run_chain(model), "UNAVAILABLE")
+                    self.assertEqual(spy.call_count, stage + 1)
+                    self.assertEqual(len(model.requests), stage + 1)
+                    self.assertEqual([str(e) for e in raised], [code])
+                    stage_name = ("inventory", "compare_a", "compare_b")[stage]
+                    self.assertIn("vision_unavailable stage=%s code=%s" % (stage_name, code),
+                                  logs.output[-1])
+
+    def test_outgoing_bodies_deny_data_collection_and_ask_usage(self):
+        model = FakeModel(usage={"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.0001})
+        sent = []
+
+        def opener(req, timeout):
+            body = json.loads(req.data.decode("utf-8"))
+            sent.append(body)
+            reply = model(body, dict(req.header_items()), timeout)
+            return FakeResponse(reply["status"], json.dumps(reply["body"]).encode("utf-8"))
+        transport = make_transport(URL, 30, host_allowlist={"openrouter.ai"}, opener=opener)
+        self.assertEqual(self.run_chain(transport), "MATCH")
+        self.assertEqual(len(sent), 3)  # inventory, compare_a, compare_b
+        for body in sent:
+            self.assertEqual(body["provider"], {"data_collection": "deny"})
+            self.assertEqual(body["usage"], {"include": True})
+
     def test_failures_at_each_stage_stop_the_chain(self):
         for stage in (0, 1, 2):
             for reply in ({"status": 503, "body": None}, {"status": 200, "body": None}, {"status": 302, "body": {}},
@@ -692,22 +737,22 @@ class ChainTests(unittest.TestCase):
 
     def test_compare_itself_never_raises_and_logs_stage_and_code(self):
         model = FakeModel(mutate=lambda i, a: a["results"].pop())
-        compare = vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)
+        compare = vision_compare.compare_from_env(ENV, transport=model)
         with self.assertLogs("vision", "WARNING") as logs:
             self.assertEqual(compare(JPEG, PNG), {"status": "UNAVAILABLE"})
         self.assertEqual(logs.output, ["WARNING:vision:vision_bad_answer stage=compare_a code=BAD_COMPARE"])
 
     def test_non_image_never_reaches_transport(self):
         model = FakeModel()
-        compare = vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)
+        compare = vision_compare.compare_from_env(ENV, transport=model)
         self.assertEqual(compare(b"%PDF-1.4 private", PNG)["status"], "UNAVAILABLE")
         self.assertEqual(compare(JPEG, b"%PDF-1.4 private")["status"], "UNAVAILABLE")
         self.assertEqual(model.requests, [])
 
-    def test_missing_key_double_fails_before_transport(self):
+    def test_missing_key_fails_before_transport(self):
         model = FakeModel()
         config = vision_compare.load_config(ENV)
-        compare = vision_compare.make_compare(config, {}, fake_call_provider, vision_core, model)
+        compare = vision_compare.make_compare(config, {}, t3.call_provider, vision_core, model)
         self.assertEqual(compare(JPEG, PNG)["status"], "UNAVAILABLE")
         self.assertEqual(model.requests, [])
 
@@ -751,7 +796,7 @@ class ChainTests(unittest.TestCase):
                 logging.getLogger("vision").info("sentinel")
                 self.run_chain(model)
                 self.run_chain(FakeModel(fail_at=0, reply={"status": 200, "body": {"choices": [{"message": {"content": KEY}}]}}))
-                vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)(b"%PDF " + PNG, PNG)
+                vision_compare.compare_from_env(ENV, transport=model)(b"%PDF " + PNG, PNG)
             text = repr(logs.output)
             for secret in (KEY, "Authorization", "Bearer", "SECRETJPEGBYTES", "SECRETPNGBYTES", "PRIVATE-CLAIM-TEXT",
                            base64.b64encode(JPEG).decode(), base64.b64encode(JPEG).decode()[:16]):
@@ -767,7 +812,7 @@ class ChainTests(unittest.TestCase):
 
     def test_core_missing_disables(self):
         with patch.object(vision_compare, "_default_core", return_value=None):
-            self.assertIsNone(vision_compare.compare_from_env(ENV, call_provider=fake_call_provider))
+            self.assertIsNone(vision_compare.compare_from_env(ENV))
 
     def test_cost_estimate(self):
         est = vision_compare.estimate_check_cost(0.30, 2.50)

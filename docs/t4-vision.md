@@ -7,6 +7,10 @@ Modules in `app/`:
   no environment proxies, 1 MiB response cap. `TimeoutError` passes through for T3b.
 - `vision_request.py`: image hygiene (JPEG/PNG/WebP by magic bytes, 8 MiB cap each,
   nothing re-encoded), the inventory request, and extraction of the model's JSON answer.
+  `chat_payload` builds every request body (inventory and both compares) with
+  `temperature: 0`, JSON output, minimal reasoning, `"provider": {"data_collection": "deny"}`
+  (D-2: only providers that neither store nor train on the request may serve it) and
+  `"usage": {"include": true}` (the reply carries the cost for the spend cap).
 - `vision_core.py`: the chain through the T2 core (`core_t2/`).
 - `vision_compare.py`: `compare_from_env(environ)` returns the `compare` callable for
   `run_bot_pair`, or `None` when unconfigured (the bot then behaves as before).
@@ -23,7 +27,11 @@ Modules in `app/`:
    model answers `photo-compare/2`, echoing the inventory digest. Each answer goes
    through T2 `validate_response`; a bad answer stops the chain (no third call).
 3. T2 `aggregate_responses` combines both orders. Each of the three calls goes through
-   `call_provider` (T3b).
+   the real T3b adapter, `core_t3/photo_compare_t3_candidate.py` `call_provider(request,
+   transport, environ, logger)`; there is no other provider path and it is not
+   injectable (`compare_from_env` resolves it itself). A `ProviderUnavailable` from it
+   (`MISSING_KEY`, `TIMEOUT`, `HTTP_ERROR`, `MALFORMED_BODY`) at any stage ends the check
+   with `UNAVAILABLE`; no further call is made.
 
 ## Status rule (T4.2)
 
@@ -126,7 +134,7 @@ printed). Fixed seed is not needed: temperature is 0, repeats show provider jitt
 | `VISION_MODEL` | yes | e.g. `google/gemini-3.6-flash` (`[A-Za-z0-9._:/-]`, up to 100) |
 | `VISION_HOST_ALLOWLIST` | yes | comma-separated hosts; the URL host must be listed, e.g. `openrouter.ai` |
 | `VISION_API_KEY` | yes | read only by `call_provider` (T3b); never logged |
-| `VISION_TIMEOUT` | no | seconds, `0 < t <= 120`, default 30 |
+| `VISION_TIMEOUT` | no | seconds, `0 < t <= 120`, default 30; the transport caps each call at it, and T3b asks for 30 s per call, so values above 30 have no effect |
 
 If a required variable is unset or empty, `compare_from_env` returns `None` and logs
 only the names of the unset variables. If values are set but invalid it raises
@@ -145,14 +153,19 @@ compare = compare_from_env(os.environ)
 main(photo_checks=PhotoChecks(session_factory, compare) if compare else None)
 ```
 
-`session_factory` is still host-provided (T3a). Until the real `call_provider` replaces
-the `NotImplementedError` stub in `core_t3/`, a configured bot answers UNAVAILABLE.
-If `core_t2/` is not importable (current Dockerfile copies `app/` only), the feature stays off.
+`session_factory` is still host-provided (T3a); wiring `app/bot.py` is WP-BOT-05. The
+real T3b `call_provider` is on main (#38), so a configured bot makes real calls (earlier
+versions of this note described a `NotImplementedError` stub; that is gone). The
+Dockerfile ships `core_t2/photo_compare_t2_candidate.py` and
+`core_t3/photo_compare_t3_candidate.py` next to `app/` (not the public contract test
+folders); CI runs `python -c "import app.vision_compare, core_t2, core_t3"` in the built
+image and `tests/test_image_layout.py` checks the same layout from the Dockerfile. If
+either core is not importable, the feature stays off.
 
 ## Logging
 
-Per provider call (three per check), from the provider `usage` field when present
-(`n/a` otherwise): `vision_call model=... usage_prompt=... usage_completion=... cost=...
+Per provider call (three per check), from the provider `usage` field, which every
+request asks for with `"usage": {"include": true}` (`n/a` when a reply lacks it): `vision_call model=... usage_prompt=... usage_completion=... cost=...
 stage=inventory|compare_a|compare_b`. Failures log stage and a public code only
 (`vision_unavailable stage=compare_a code=TIMEOUT`, `vision_bad_answer stage=... code=BAD_COMPARE`,
 `vision_rejected code=NOT_IMAGE`). No identifiers, bytes, hashes, base64, keys or model text.
@@ -170,14 +183,17 @@ each compare answer 900 tokens.
 `estimate_check_cost(prompt_usd_per_m, output_usd_per_m)` computes the dollars. At
 illustrative prices of 0.30 / 2.50 USD per million tokens (not the real price of any
 model): 7,600 x 0.30 / 1e6 + 2,200 x 2.50 / 1e6 = about 0.0078 USD per check, roughly
-three times the cost of a single call. The smoke test's `vision_call` lines give the
-real numbers; replace the assumptions with them. Latency is also three sequential calls.
+three times the cost of a single call. The real cost comes from `usage.cost` of each
+reply (requested via `usage.include`) and is logged as `cost=` on the `vision_call` lines;
+the spend cap sums those. The smoke test's lines replace the assumptions above. Latency is also three sequential calls.
 
 ## Privacy note for the bot text
 
 Photos are sent to the configured vision provider (currently OpenRouter and the model
 behind it) for the check. The bot does not store them: they are deleted when the check
-ends. The provider's own retention is governed by its terms and settings.
+ends. Every request carries `provider.data_collection = "deny"`, so only providers that
+do not store or train on the request are used; their retention is otherwise governed by
+their terms.
 
 ## Live smoke test (one pair, orchestrator)
 
@@ -191,9 +207,11 @@ python3 -m app.vision_compare /path/reference.jpg /path/candidate.jpg
 
 Run from the repo root. Prints the status, plus three `vision_call` log lines; exit
 code 0 for MATCH/MISMATCH/NEEDS_REVIEW, 1 for UNAVAILABLE, 2 for bad usage or missing
-config. Requires the real T3b `call_provider` and `core_t2/` on the path (run from the repo root).
+config. Uses the real T3b `call_provider`; needs `core_t2/` and `core_t3/` on the path (run from the repo root).
 
 ## Tests
 
-`python3 -m unittest discover -s tests -t .` (fake transports; the T3b double lives in
-`tests/test_t4_vision.py` only).
+`python3 -m unittest discover -s tests -t .` (fake transports only; every chain test
+runs through the real `core_t3` `call_provider`, and a spy test asserts it is called once
+per stage). `tests/test_image_layout.py` rebuilds `/app` from the Dockerfile's `COPY`
+lines and imports the chain there.

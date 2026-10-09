@@ -61,7 +61,12 @@ def data_url(data, max_bytes=MAX_IMAGE_BYTES):
 
 
 def chat_payload(model, content):
-    """The fixed generation settings for every call: temperature 0, JSON, minimal reasoning."""
+    """The fixed settings for every call: temperature 0, JSON, minimal reasoning.
+
+    provider.data_collection=deny (D-2): only providers that do not store or train
+    on the request may serve it. usage.include=true: the reply carries the cost,
+    which the spend cap reads from the vision_call log line.
+    """
     if not isinstance(model, str) or not model.strip():
         raise ValueError("model required")
     return {
@@ -69,6 +74,8 @@ def chat_payload(model, content):
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "reasoning": {"effort": "minimal"},
+        "provider": {"data_collection": "deny"},
+        "usage": {"include": True},
         "messages": [{"role": "user", "content": content}],
     }
 
