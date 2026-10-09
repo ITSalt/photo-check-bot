@@ -152,6 +152,7 @@ in both modes. The output never contains paths, URLs or model text.
 | `VISION_MODEL` | yes | e.g. `google/gemini-3.6-flash` (`[A-Za-z0-9._:/-]`, up to 100) |
 | `VISION_HOST_ALLOWLIST` | yes | comma-separated hosts; the URL host must be listed, e.g. `openrouter.ai` |
 | `VISION_API_KEY` | yes | read only by `call_provider` (T3b); never logged |
+| `CHECK_COUNTER_SALT` | yes, for the bot | key of the free-check counter (D-12), at least 32 characters; unset or short keeps the vision check off |
 | `VISION_TIMEOUT` | no | seconds, `0 < t <= 120`, default 30; the transport caps each call at it, and T3b asks for 30 s per call, so values above 30 have no effect |
 
 If a required variable is unset or empty, `compare_from_env` returns `None` and logs
@@ -159,19 +160,26 @@ only the names of the unset variables. If values are set but invalid it raises
 `VisionConfigError` (no values in the message). Nothing is hardcoded as a default:
 provider and model are the owner's choice.
 
-Wiring (host code, after T3b is merged):
+Wiring (WP-BOT-05): `python -m app.bot` calls `app.vision_wiring.build_photo_checks`,
+which returns `PhotoChecks` only when all of these hold, else `None` and the bot replies
+exactly as before:
 
-```python
-import os
-from app.vision_compare import compare_from_env
-from app.photo_checks import PhotoChecks
-from app.bot import main
+- `compare_from_env(os.environ)` is not `None` (an invalid config logs and stays off);
+- `CHECK_COUNTER_SALT` is set and at least 32 characters (else a names-only warning);
+- the free-check counter file (`DATA_DIR/check_counter.json`) is readable;
+- one `SpendCap(DATA_DIR/spend_cap.json, VISION_DAILY_CAP_USD, 0.02, 3)` is created at
+  startup; `CapConfigError` logs `spend_cap_error code=CONFIG`, a second process
+  `spend_cap_error code=SECOND_WRITER`.
 
-compare = compare_from_env(os.environ)
-main(photo_checks=PhotoChecks(session_factory, compare) if compare else None)
-```
+Per check: the free-check counter allows (3 per user, D-12) -> `reserve()` -> download
+(`app/session_factory.py`, a fresh 0o700 directory under the temp dir) -> compare, with
+`record(usage.cost)` after each provider call (a failed call or a reply without a cost
+counts the 0.02 fallback) -> the counter is charged only on MATCH or MISMATCH (D-11) ->
+the reservation is closed. A counter or cap refusal downloads nothing and calls nothing.
 
-`session_factory` is still host-provided (T3a); wiring `app/bot.py` is WP-BOT-05. The
+The free-check counter stores rows `{"key", "used", "last"}` only: `key` is
+HMAC-SHA256(`CHECK_COUNTER_SALT`, user id), `last` the UTC date of the last counted
+check; rows older than 90 days are purged at startup and once a day. The
 real T3b `call_provider` is on main (#38), so a configured bot makes real calls (earlier
 versions of this note described a `NotImplementedError` stub; that is gone). The
 Dockerfile ships `core_t2/photo_compare_t2_candidate.py` and
@@ -212,7 +220,7 @@ the spend cap sums those. The smoke test's lines replace the assumptions above. 
 value fails closed). A check reserves its worst case before the first provider call; a call
 with no usable cost counts as a fallback of 0.02 USD. One process per ledger: a second one
 fails to take the lock (`SECOND_WRITER`). A corrupt ledger or a refused lock fails closed:
-no provider call. Wiring into the bot is WP-BOT-05.
+no provider call. Wired into the bot by WP-BOT-05 (see Wiring above).
 
 ## Privacy note for the bot text
 

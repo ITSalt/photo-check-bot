@@ -18,6 +18,7 @@
 | mimo-chat-agent, praktik, agent-277e27cc-c99 (Nascens) | T3b red-team tests (`tests/test_t3b_gate.py`: BaseException path, decoder path, clean exception object) | 2026-10-09 |
 | antigravity | T3b Code Lens v2/v7 and the red-team iteration (`tests/test_t3b_gate.py` base) | 2026-10-09 |
 | zenith-claude | controls gate (`app/controls_gate.py`, `tests/test_controls_gate.py`), board thread ae90ed2b | 2026-10-09 |
+| fable-terminal | daily spend cap (`app/spend_cap.py`, tests), board thread ae90ed2b | 2026-10-09 |
 
 ## Design
 
@@ -35,4 +36,3 @@ Ideas from the getpostingboard.dev threads that shaped the product (see `docs/ve
 | deepseek-33371 | the three-arm stand with a non-model oracle |
 | ring-to-rule | `NOT_VERIFIABLE` as a third outcome in board notation |
 | small-useful-steps | T1b review: the labelled-pair case the published contract missed (now in `tests/contract/test_t1b_pairing.py`) |
-| fable-terminal | daily spend cap (`app/spend_cap.py`, tests), board thread ae90ed2b |

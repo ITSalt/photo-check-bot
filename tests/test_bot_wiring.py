@@ -1,0 +1,492 @@
+"""WP-BOT-05: the vision check wired into app/bot.py. Fakes only: no network, no keys.
+
+Every scenario drives app.bot.handle with Telegram updates; getFile / file download,
+sendMessage and the provider are fakes. Photos land in a temporary photo root that
+must be empty after every check.
+"""
+import importlib
+import json
+import logging
+import os
+import pathlib
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from app import check_counter, spend_cap, vision_compare, vision_wiring
+from app.photo_checks import TEXTS
+from tests.test_t4_vision import ENV as VISION_ENV, FakeModel, JPEG, KEY, PNG
+
+SALT = "unit-test-salt-not-a-secret-0123456789"
+USER, NAME, USERNAME = 987654321, "Alicefirstname", "alice_seller_nick"
+FILES = {"gen-file-id-1": JPEG, "real-file-id-1": PNG}
+MODEL_TEXT = "Same in both."
+D11_RU = "Эта проверка не списана: бот не уверен — посмотрите отмеченные детали"
+D11_EN = "This check was not counted: the bot is not sure — look at the marked details"
+DETAIL = {"status": "NEEDS_REVIEW", "total": 12, "confirmed": [{"label": "x"}] * 9,
+          "to_check": [{"label": "застёжка", "reason": "not_visible"}], "differs": [], "extra": "none"}
+
+# Replies of the bot on main (392a8f7) with the feature off, copied verbatim.
+MAIN_TEXTS = {
+    "ru": {"welcome": "Привет! Я проверяю ИИ-фото товара перед публикацией на маркетплейсе.\nСкоро здесь можно будет прислать сгенерированное фото и фото настоящей вещи, а я скажу, что исказилось и как это исправить.\n\nПрисланные фото удаляются сразу после проверки.",
+           "fallback": "Проверка фото пока в разработке. Напишите /start."},
+    "en": {"welcome": "Hi! I check AI product photos before they go live on a marketplace.\nSoon you'll be able to send a generated photo and a photo of the real item here, and I'll tell you what changed and how to fix it.\n\nPhotos you send are deleted right after the check.",
+           "fallback": "Photo checks are still in development. Send /start."},
+}
+
+
+def load_bot():
+    with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "unit-test-placeholder"}):
+        return importlib.import_module("app.bot")
+
+
+def update(user=USER, lang="ru", text=None, photo=None, caption=None):
+    msg = {"chat": {"id": user, "type": "private"},
+           "from": {"id": user, "first_name": NAME, "username": USERNAME, "language_code": lang}}
+    if text is not None:
+        msg["text"] = text
+    if photo is not None:
+        msg["photo"] = [{"file_id": photo, "file_size": len(FILES.get(photo, b"x"))}]
+        if caption:
+            msg["caption"] = caption
+    return {"update_id": 1, "message": msg}
+
+
+class FakeTelegram:
+    def __init__(self):
+        self.get_calls, self.fetch_calls = [], []
+
+    def get_file(self, file_id):
+        self.get_calls.append(file_id)
+        return {"file_id": file_id, "file_path": "photos/" + file_id, "file_size": len(FILES[file_id])}
+
+    def fetch(self, file_path):
+        self.fetch_calls.append(file_path)
+        yield FILES[file_path.split("/", 1)[1]]
+
+
+class FakeCompare:
+    """compare_factory for build_photo_checks: three 'calls' per check, each reported to on_call."""
+    def __init__(self, test, result, costs=(0.001, 0.002, 0.003)):
+        self.test, self.result, self.costs = test, result, costs
+        self.calls, self.on_call = [], None
+
+    def __call__(self, environ, *, on_call=None):
+        self.on_call = on_call
+        return self.compare
+
+    def compare(self, reference, candidate):
+        # Roles: the real photo is the reference; both are on disk during the check.
+        self.test.assertEqual((reference, candidate), (PNG, JPEG))
+        self.test.assertEqual(len(os.listdir(self.test.photo_dir)), 1)
+        self.calls.append(1)
+        for cost in self.costs:
+            self.on_call(cost)
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+
+class WiringBase(unittest.TestCase):
+    def setUp(self):
+        self.bot = load_bot()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data_dir = os.path.join(self.tmp.name, "data")
+        self.photo_dir = os.path.join(self.tmp.name, "photos")
+        self.env = dict(VISION_ENV, CHECK_COUNTER_SALT=SALT)
+        self.telegram = FakeTelegram()
+        self.built = []
+        waitlist_path = os.path.join(self.tmp.name, "waitlist", "waitlist.json")
+        for name, value in (("DATA_DIR", os.path.dirname(waitlist_path)), ("PATH", waitlist_path)):
+            patcher = patch.object(self.bot.waitlist, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        for checks in self.built:
+            checks.gate.cap.close()
+        self.tmp.cleanup()
+
+    def fresh(self):
+        """A clean bot state for the next subTest of a loop."""
+        self.tearDown()
+        self.setUp()
+
+    def build(self, compare_factory, env=None, **kw):
+        checks = vision_wiring.build_photo_checks(
+            self.env if env is None else env, self.telegram.get_file, self.telegram.fetch,
+            data_dir=self.data_dir, photo_dir=self.photo_dir, compare_factory=compare_factory, **kw)
+        if checks is not None:
+            self.built.append(checks)
+        return checks
+
+    def run_updates(self, checks, *updates):
+        sent = []
+        with patch.object(self.bot, "call", side_effect=lambda method, params: sent.append(params["text"])):
+            for u in updates:
+                self.bot.handle(u, photo_checks=checks)
+        return sent
+
+    def pair(self, checks, lang="ru", user=USER):
+        return self.run_updates(checks, update(user, lang, photo="gen-file-id-1"),
+                                update(user, lang, photo="real-file-id-1"))
+
+    def used(self, checks, user=USER):
+        return checks.gate.counter.used(user)
+
+
+class StatusTests(WiringBase):
+    """AC1, AC5: reply per status, photo dir empty, counter only on MATCH / MISMATCH."""
+
+    def test_each_status_reply_cleanup_and_counter(self):
+        cases = [("MATCH", {"status": "MATCH"}, 1),
+                 ("MISMATCH", {"status": "MISMATCH"}, 1),
+                 ("NEEDS_REVIEW", DETAIL, 0),
+                 ("UNAVAILABLE", {"status": "UNAVAILABLE"}, 0),
+                 ("UNAVAILABLE", RuntimeError("provider exploded " + MODEL_TEXT), 0),
+                 ("UNAVAILABLE", {"status": "garbage"}, 0)]
+        for lang in ("ru", "en"):
+            for status, result, charged in cases:
+                with self.subTest(lang=lang, status=status, result=repr(result)):
+                    self.fresh()
+                    fake = FakeCompare(self, result)
+                    checks = self.build(fake)
+                    sent = self.pair(checks, lang)
+                    self.assertEqual(sent[0], TEXTS[lang]["ask_real"])
+                    self.assertTrue(sent[1].startswith(TEXTS[lang][status]), sent[1])
+                    self.assertEqual(fake.calls, [1])
+                    self.assertEqual(os.listdir(self.photo_dir), [])
+                    self.assertEqual(self.used(checks), charged)
+                    self.assertEqual(checks.gate.cap._held, 0)   # reservation closed
+
+    def test_needs_review_reply_carries_d11_line_and_to_check_list(self):
+        for lang, line, item in (("ru", D11_RU, "Проверьте сами: застёжка (не видно)."),
+                                 ("en", D11_EN, "Check yourself: застёжка (not visible).")):
+            with self.subTest(lang=lang):
+                self.fresh()
+                checks = self.build(FakeCompare(self, DETAIL))
+                reply = self.pair(checks, lang)[1]
+                self.assertIn(line, reply)
+                self.assertIn(item, reply)
+                self.assertEqual(self.used(checks), 0)
+
+    def test_cleanup_failure_sends_nothing_and_does_not_charge(self):
+        checks = self.build(FakeCompare(self, {"status": "MATCH"}))
+        real_rmtree = vision_wiring.session_factory.shutil.rmtree
+        with patch.object(vision_wiring.session_factory.shutil, "rmtree", side_effect=OSError("disk")):
+            sent = self.pair(checks)
+        self.assertEqual(sent, [TEXTS["ru"]["ask_real"]])
+        self.assertEqual(self.used(checks), 0)
+        self.assertEqual(checks.gate.cap._held, 0)
+        for leftover in os.listdir(self.photo_dir):   # the files themselves were removed
+            self.assertEqual(os.listdir(os.path.join(self.photo_dir, leftover)), [])
+            real_rmtree(os.path.join(self.photo_dir, leftover))
+
+    def test_download_failure_is_unavailable_uncharged_and_clean(self):
+        fake = FakeCompare(self, {"status": "MATCH"})
+        def broken(path):
+            yield b"\xff\xd8\xff partial"
+            raise OSError("net")
+        self.telegram.fetch = broken
+        checks = self.build(fake)
+        sent = self.pair(checks)
+        self.assertEqual(sent[1], TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(os.listdir(self.photo_dir), [])
+        self.assertEqual(self.used(checks), 0)
+        self.assertEqual(checks.gate.cap._held, 0)
+
+
+class FreeCounterTests(WiringBase):
+    """AC5a: 4th check refused without a provider call; no raw id in the stored file."""
+
+    def test_fourth_check_gets_waitlist_text_and_no_compare_call(self):
+        for lang in ("ru", "en"):
+            with self.subTest(lang=lang):
+                self.fresh()
+                fake = FakeCompare(self, {"status": "MISMATCH"})
+                checks = self.build(fake)
+                for _ in range(3):
+                    self.pair(checks, lang)
+                self.assertEqual(self.used(checks), 3)
+                gets = len(self.telegram.get_calls)
+                with patch.object(checks.gate.cap, "reserve", wraps=checks.gate.cap.reserve) as reserve:
+                    sent = self.pair(checks, lang)
+                self.assertEqual(sent[1], TEXTS[lang]["free_used_up"])
+                self.assertEqual(fake.calls, [1, 1, 1])
+                reserve.assert_not_called()                       # counter is asked before the cap
+                self.assertEqual(len(self.telegram.get_calls), gets)  # nothing downloaded
+                self.assertEqual(os.listdir(self.photo_dir), [])
+                self.assertEqual(self.used(checks), 3)
+                self.assertEqual(self.used(checks, USER + 1), 0)
+
+    def test_needs_review_and_unavailable_never_use_up_free_checks(self):
+        fake = FakeCompare(self, DETAIL)
+        checks = self.build(fake)
+        for _ in range(5):
+            self.pair(checks)
+        fake.result = {"status": "UNAVAILABLE"}
+        for _ in range(5):
+            self.pair(checks)
+        self.assertEqual(self.used(checks), 0)
+        fake.result = {"status": "MATCH"}
+        self.assertTrue(self.pair(checks)[1].startswith(TEXTS["ru"]["MATCH"]))
+
+    def test_stored_file_has_no_raw_id_or_names(self):
+        checks = self.build(FakeCompare(self, {"status": "MATCH"}))
+        self.run_updates(checks, update(text="/start campaign_x"))
+        self.pair(checks)
+        raw = pathlib.Path(os.path.join(self.data_dir, check_counter.FILE_NAME)).read_bytes()
+        for needle in (str(USER), NAME, USERNAME, "gen-file-id-1", "real-file-id-1"):
+            self.assertNotIn(needle.encode(), raw)
+        rows = json.loads(raw)
+        self.assertEqual([set(r) for r in rows], [{"key", "used", "last"}])
+        self.assertEqual(rows[0]["used"], 1)
+
+    def test_purge_runs_from_the_polling_tick(self):
+        now = [1_791_590_400.0]   # 2026-10-09 12:00 UTC
+        checks = self.build(FakeCompare(self, {"status": "MATCH"}), clock=lambda: now[0])
+        self.pair(checks)
+        now[0] += 89 * 86400
+        checks.tick()
+        self.assertEqual(self.used(checks), 1)
+        now[0] += 2 * 86400
+        checks.tick()
+        self.assertEqual(self.used(checks), 0)
+        self.assertEqual(json.loads(pathlib.Path(os.path.join(self.data_dir, check_counter.FILE_NAME)).read_text(encoding="utf-8")), [])
+
+    def test_main_loop_ticks(self):
+        checks = self.build(FakeCompare(self, {"status": "MATCH"}))
+        replies = iter([[], KeyboardInterrupt()])
+        def call(method, params=None, timeout=None):
+            value = next(replies)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+        with patch.object(self.bot, "call", side_effect=call), patch.object(checks, "tick") as tick, \
+                patch.object(self.bot.logging, "basicConfig"):
+            with self.assertRaises(KeyboardInterrupt):
+                self.bot.main(photo_checks=checks)
+        tick.assert_called_once()
+
+    def test_missing_or_short_salt_keeps_feature_off(self):
+        for salt in (None, "", "s" * 31):
+            with self.subTest(salt=salt):
+                env = dict(VISION_ENV)
+                if salt is not None:
+                    env["CHECK_COUNTER_SALT"] = salt
+                fake = FakeCompare(self, {"status": "MATCH"})
+                with self.assertLogs("check_counter", "WARNING") as logs:
+                    self.assertIsNone(self.build(fake, env=env))
+                self.assertNotIn("s" * 10, repr(logs.output))
+                self.assertFalse(os.path.exists(self.data_dir))   # no counter file, no cap created
+
+
+class SpendCapTests(WiringBase):
+    """AC6: no provider call when the cap refuses; one cap at startup; SECOND_WRITER -> off."""
+
+    def test_cap_refusal_replies_d7_no_compare_no_download_no_charge(self):
+        for lang in ("ru", "en"):
+            with self.subTest(lang=lang):
+                self.fresh()
+                fake = FakeCompare(self, {"status": "MATCH"})
+                checks = self.build(fake, env=dict(self.env, VISION_DAILY_CAP_USD="0"))
+                sent = self.pair(checks, lang)
+                self.assertEqual(sent[1], TEXTS[lang]["limit_reached"])
+                self.assertEqual(fake.calls, [])
+                self.assertEqual(self.telegram.get_calls, [])
+                self.assertEqual(os.listdir(self.photo_dir), [])
+                self.assertEqual(self.used(checks), 0)
+
+    def test_cap_reached_after_spending(self):
+        # 0.10 USD cap, hold 0.06: the 1st check fits; it records 0.05, so the 2nd (0.05 + 0.06) is refused.
+        fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.02, 0.02, 0.01))
+        checks = self.build(fake, env=dict(self.env, VISION_DAILY_CAP_USD="0.10"))
+        self.assertTrue(self.pair(checks)[1].startswith(TEXTS["ru"]["MATCH"]))
+        self.assertEqual(self.pair(checks, user=USER + 1)[1], TEXTS["ru"]["limit_reached"])
+        self.assertEqual(fake.calls, [1])
+        ledger = json.loads(pathlib.Path(os.path.join(self.data_dir, "spend_cap.json")).read_text(encoding="utf-8"))
+        self.assertAlmostEqual(ledger["spent_usd"], 0.05)
+
+    def test_cap_created_once_at_startup(self):
+        with patch.object(vision_wiring.spend_cap, "SpendCap", wraps=spend_cap.SpendCap) as cls:
+            checks = self.build(FakeCompare(self, {"status": "MISMATCH"}))
+            for user in (USER, USER + 1, USER + 2):
+                self.pair(checks, user=user)
+        cls.assert_called_once()
+        args, kwargs = cls.call_args
+        self.assertEqual(args[0], os.path.join(self.data_dir, "spend_cap.json"))
+        self.assertEqual(args[1], 2.0)
+        self.assertEqual((kwargs["per_call_fallback_usd"], kwargs["calls_per_check"]), (0.02, 3))
+
+    def test_second_writer_turns_feature_off(self):
+        os.makedirs(self.data_dir)
+        holder = spend_cap.SpendCap(os.path.join(self.data_dir, "spend_cap.json"), 2.0)
+        try:
+            with self.assertLogs("vision_wiring", "ERROR") as logs:
+                self.assertIsNone(self.build(FakeCompare(self, {"status": "MATCH"})))
+            self.assertIn("spend_cap_error code=SECOND_WRITER", logs.output[0])
+        finally:
+            holder.close()
+
+    def test_invalid_cap_config_turns_feature_off(self):
+        with self.assertLogs("vision_wiring", "ERROR") as logs:
+            self.assertIsNone(self.build(FakeCompare(self, {"status": "MATCH"}),
+                                         env=dict(self.env, VISION_DAILY_CAP_USD="lots")))
+        self.assertIn("spend_cap_error code=CONFIG", logs.output[0])
+
+    def test_guarded_compare_never_calls_without_reservation(self):
+        fake = FakeCompare(self, {"status": "MATCH"})
+        checks = self.build(fake)
+        self.assertEqual(checks.compare(PNG, JPEG), {"status": "UNAVAILABLE"})
+        self.assertEqual(fake.calls, [])
+
+
+class RealChainCostTests(WiringBase):
+    """record(usage.cost) after each of the three real provider calls (fake transport)."""
+
+    def chain(self, model):
+        return lambda environ, on_call=None: vision_compare.compare_from_env(
+            environ, transport=model, on_call=on_call)
+
+    def spent(self):
+        return json.loads(pathlib.Path(os.path.join(self.data_dir, "spend_cap.json")).read_text(encoding="utf-8"))["spent_usd"]
+
+    def test_each_call_cost_is_recorded(self):
+        model = FakeModel(usage={"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.004})
+        checks = self.build(self.chain(model))
+        with patch.object(spend_cap.Reservation, "record", autospec=True,
+                          side_effect=spend_cap.Reservation.record) as record:
+            reply = self.pair(checks)[1]
+        self.assertTrue(reply.startswith(TEXTS["ru"]["MATCH"]), reply)
+        self.assertEqual(len(model.requests), 3)
+        self.assertEqual([c.args[1] for c in record.call_args_list], [0.004, 0.004, 0.004])
+        self.assertAlmostEqual(self.spent(), 0.012)
+        self.assertEqual(self.used(checks), 1)
+        self.assertEqual(os.listdir(self.photo_dir), [])
+
+    def test_missing_usage_counts_fallback_per_call(self):
+        checks = self.build(self.chain(FakeModel()))
+        self.pair(checks)
+        self.assertAlmostEqual(self.spent(), 0.06)
+
+    def test_failed_call_counts_fallback_and_stops_chain(self):
+        model = FakeModel(usage={"cost": 0.004}, fail_at=1, reply=TimeoutError())
+        checks = self.build(self.chain(model))
+        reply = self.pair(checks)[1]
+        self.assertEqual(reply, TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(len(model.requests), 2)
+        self.assertAlmostEqual(self.spent(), 0.024)
+        self.assertEqual(self.used(checks), 0)
+        self.assertEqual(os.listdir(self.photo_dir), [])
+
+    def test_logs_carry_no_identifiers_or_model_text(self):
+        model = FakeModel(usage={"cost": 0.004})
+        checks = self.build(self.chain(model))
+        with self.assertLogs(level=logging.DEBUG) as logs:
+            self.run_updates(checks, update(text="/start"))
+            self.pair(checks)
+            self.pair(checks, user=USER)
+            logging.getLogger("probe").info("probe")
+        text = "\n".join(logs.output)
+        for needle in (str(USER), NAME, USERNAME, "gen-file-id-1", "real-file-id-1", "photos/",
+                       self.photo_dir, SALT, KEY, MODEL_TEXT, "пуговицы", "SECRET",
+                       checks.gate.counter.key(USER)):
+            self.assertNotIn(needle, text)
+        self.assertIn("check_done status=MATCH charged=yes", text)
+
+
+class PrivacyAndOffTests(WiringBase):
+    """AC2: privacy line before or with the first upload prompt; AC3: VISION_* unset = main."""
+
+    def test_privacy_before_first_prompt_ru_en(self):
+        for lang in ("ru", "en"):
+            with self.subTest(lang=lang):
+                self.fresh()
+                checks = self.build(FakeCompare(self, {"status": "MATCH"}))
+                sent = self.run_updates(checks, update(lang=lang, text="/start"))
+                t = TEXTS[lang]
+                self.assertEqual(sent, [t["welcome_checks"], t["privacy"], t["ask_generated"]])
+                self.assertLess(sent.index(t["privacy"]), sent.index(t["ask_generated"]))
+                self.assertIn("OpenRouter", t["privacy"])
+                self.assertIn("google/gemini-3.6-flash", t["privacy"])
+                self.assertIn("/privacy", t["ask_real"])
+                self.assertNotIn("Скоро", t["welcome_checks"])
+                self.assertNotIn("Soon", t["welcome_checks"])
+                self.assertEqual(self.run_updates(checks, update(lang=lang, text="/privacy")), [t["privacy"]])
+                self.assertEqual(self.run_updates(checks, update(lang=lang, text="/help")),
+                                 [t["welcome_checks"], t["privacy"]])
+
+    def test_privacy_line_texts(self):
+        self.assertIn("бот хранит только число ваших проверок под обезличенным ключом, 90 дней",
+                      TEXTS["ru"]["privacy"].lower())
+        self.assertIn("only the number of your checks under an anonymised key, for 90 days", TEXTS["en"]["privacy"])
+        for lang in ("ru", "en"):
+            self.assertIn("(UTC)", TEXTS[lang]["limit_reached"])
+        self.assertTrue(TEXTS["ru"]["limit_reached"].startswith("Дневной лимит проверок исчерпан, попробуйте завтра (UTC)"))
+        self.assertTrue(TEXTS["en"]["limit_reached"].startswith("Daily check limit reached, try again tomorrow (UTC)"))
+
+    def test_help_keeps_half_pair(self):
+        fake = FakeCompare(self, {"status": "MATCH"})
+        checks = self.build(fake)
+        sent = self.run_updates(checks, update(photo="gen-file-id-1"), update(text="/help"),
+                                update(photo="real-file-id-1"))
+        self.assertTrue(sent[-1].startswith(TEXTS["ru"]["MATCH"]))
+
+    def test_vision_unset_replies_exactly_as_main(self):
+        env = {"CHECK_COUNTER_SALT": SALT}
+        with patch.dict(os.environ, {}, clear=False):
+            self.assertIsNone(vision_wiring.build_photo_checks(env, self.telegram.get_file,
+                                                               self.telegram.fetch, data_dir=self.data_dir,
+                                                               photo_dir=self.photo_dir))
+            self.assertIsNone(self.bot.build({}))
+        self.assertFalse(os.path.exists(self.data_dir))
+        for lang in ("ru", "en"):
+            with self.subTest(lang=lang), patch.object(self.bot.waitlist, "record", return_value=("direct", False)):
+                sent = self.run_updates(None, update(lang=lang, text="/start"), update(lang=lang, photo="gen-file-id-1"),
+                                        update(lang=lang, text="hello"), update(lang=lang, text="/help"))
+                m = MAIN_TEXTS[lang]
+                self.assertEqual(sent, [m["welcome"], m["fallback"], m["fallback"], m["fallback"]])
+        self.assertEqual(self.telegram.get_calls, [])
+
+    def test_invalid_vision_config_keeps_feature_off(self):
+        with self.assertLogs("vision_wiring", "WARNING"):
+            self.assertIsNone(vision_wiring.build_photo_checks(
+                dict(self.env, VISION_MODEL="bad model!"), self.telegram.get_file, self.telegram.fetch,
+                data_dir=self.data_dir, photo_dir=self.photo_dir))
+
+
+class FetchFileTests(unittest.TestCase):
+    def setUp(self):
+        self.bot = load_bot()
+
+    def test_rejects_unsafe_paths_before_any_request(self):
+        with patch.object(self.bot.urllib.request, "urlopen") as urlopen:
+            for bad in (None, "", "/etc/passwd", "photos/../x", 5):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    list(self.bot.fetch_file(bad))
+        urlopen.assert_not_called()
+
+    def test_streams_chunks_from_file_endpoint(self):
+        class Resp:
+            def __init__(self):
+                self.parts = [b"ab", b"cd", b""]
+            def read(self, n):
+                return self.parts.pop(0)
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        with patch.object(self.bot.urllib.request, "urlopen", return_value=Resp()) as urlopen:
+            self.assertEqual(list(self.bot.fetch_file("photos/file_1.jpg")), [b"ab", b"cd"])
+        self.assertEqual(urlopen.call_args.args[0],
+                         "https://api.telegram.org/file/botunit-test-placeholder/photos/file_1.jpg")
+
+    def test_get_file_calls_bot_api(self):
+        with patch.object(self.bot, "call", return_value={"file_path": "p"}) as call:
+            self.assertEqual(self.bot.get_file("fid"), {"file_path": "p"})
+        self.assertEqual(call.call_args.args[:2], ("getFile", {"file_id": "fid"}))
+
+
+if __name__ == "__main__":
+    unittest.main()

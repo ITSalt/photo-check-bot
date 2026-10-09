@@ -44,11 +44,13 @@ jobs:
           VISION_MODEL: google/gemini-3.6-flash
           VISION_HOST_ALLOWLIST: openrouter.ai
           VISION_DAILY_CAP_USD: "2"
+          # Free-check counter key (D-12). Unset or shorter than 32 characters keeps the vision check off.
+          CHECK_COUNTER_SALT: ${{ secrets.CHECK_COUNTER_SALT }}
         run: |
           SSH="ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes ${VPS_USER}@${VPS_HOST}"
           git archive --format=tar HEAD | $SSH 'rm -rf ~/app.new && mkdir -p ~/app.new && tar -x -C ~/app.new'
-          printf 'TELEGRAM_BOT_TOKEN=%s\nVISION_API_KEY=%s\nVISION_BASE_URL=%s\nVISION_MODEL=%s\nVISION_HOST_ALLOWLIST=%s\nVISION_DAILY_CAP_USD=%s\n' \
-            "$TELEGRAM_BOT_TOKEN" "$VISION_API_KEY" "$VISION_BASE_URL" "$VISION_MODEL" "$VISION_HOST_ALLOWLIST" "$VISION_DAILY_CAP_USD" \
+          printf 'TELEGRAM_BOT_TOKEN=%s\nVISION_API_KEY=%s\nVISION_BASE_URL=%s\nVISION_MODEL=%s\nVISION_HOST_ALLOWLIST=%s\nVISION_DAILY_CAP_USD=%s\nCHECK_COUNTER_SALT=%s\n' \
+            "$TELEGRAM_BOT_TOKEN" "$VISION_API_KEY" "$VISION_BASE_URL" "$VISION_MODEL" "$VISION_HOST_ALLOWLIST" "$VISION_DAILY_CAP_USD" "$CHECK_COUNTER_SALT" \
             | $SSH 'umask 077 && cat > ~/app.new/.env'
           $SSH 'set -e; rm -rf ~/app.prev; if [ -d ~/app ]; then mv ~/app ~/app.prev; fi; mv ~/app.new ~/app; cd ~/app && docker compose up -d --build --remove-orphans && docker compose ps'
 

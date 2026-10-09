@@ -4,13 +4,41 @@
     "short_description": "",
     "description": "",
     "welcome": "Привет! Я проверяю ИИ-фото товара перед публикацией на маркетплейсе.\nСкоро здесь можно будет прислать сгенерированное фото и фото настоящей вещи, а я скажу, что исказилось и как это исправить.\n\nПрисланные фото удаляются сразу после проверки.",
-    "fallback": "Проверка фото пока в разработке. Напишите /start."
+    "fallback": "Проверка фото пока в разработке. Напишите /start.",
+    "welcome_checks": "Привет! Я проверяю ИИ-фото товара перед публикацией на маркетплейсе.\nПришлите сгенерированное фото товара и фото настоящей вещи, а я скажу, совпадают ли проверенные детали и что посмотреть самому.\n\nПервые 3 проверки бесплатны. Проверка, в которой бот не уверен, не списывается.",
+    "privacy": "Конфиденциальность: для проверки фото отправляются в OpenRouter (модель google/gemini-3.6-flash) с запретом на сбор данных. Бот удаляет фото, когда проверка заканчивается; хранение у провайдера регулируется его условиями. Бот хранит только число ваших проверок под обезличенным ключом, 90 дней.",
+    "ask_generated": "Пришлите сгенерированное фото товара.",
+    "ask_real": "Теперь пришлите фото настоящей вещи. Фото уйдут на проверку в OpenRouter, подробнее: /privacy",
+    "expired": "Время ожидания пары истекло. Пришлите фотографии заново.",
+    "cancelled": "Проверка отменена.",
+    "unsupported": "Пришлите фотографию или файл изображения.",
+    "busy": "Сейчас слишком много незавершённых пар. Попробуйте позже.",
+    "MATCH": "Проверенные детали совпали. Это не гарантия отсутствия других отличий.",
+    "MISMATCH": "Обнаружены отличия. Проверьте фото перед публикацией.",
+    "NEEDS_REVIEW": "Сходство не подтверждено, нужна ручная проверка.\nЭта проверка не списана: бот не уверен — посмотрите отмеченные детали.",
+    "UNAVAILABLE": "Не удалось выполнить проверку. Попробуйте позже. Эта проверка не списана.",
+    "limit_reached": "Дневной лимит проверок исчерпан, попробуйте завтра (UTC). Фото удалены, проверка не выполнялась.",
+    "free_used_up": "Бесплатные проверки закончились: 3 из 3. Платные проверки скоро появятся, вы в списке ожидания. Фото удалены, проверка не выполнялась."
   },
   "en": {
     "name": "LookTwin · Photo check",
     "short_description": "",
     "description": "",
     "welcome": "Hi! I check AI product photos before they go live on a marketplace.\nSoon you'll be able to send a generated photo and a photo of the real item here, and I'll tell you what changed and how to fix it.\n\nPhotos you send are deleted right after the check.",
-    "fallback": "Photo checks are still in development. Send /start."
+    "fallback": "Photo checks are still in development. Send /start.",
+    "welcome_checks": "Hi! I check AI product photos before they go live on a marketplace.\nSend a generated product photo and a photo of the real item, and I'll tell you whether the checked details match and what to look at yourself.\n\nThe first 3 checks are free. A check the bot is not sure about is not counted.",
+    "privacy": "Privacy: for the check, photos are sent to OpenRouter (model google/gemini-3.6-flash) with data collection denied. The bot deletes the photos when the check ends; the provider's retention is governed by its terms. The bot stores only the number of your checks under an anonymised key, for 90 days.",
+    "ask_generated": "Send the generated product photo.",
+    "ask_real": "Now send a photo of the real item. The photos go to OpenRouter for the check, details: /privacy",
+    "expired": "The pair timed out. Send the photos again.",
+    "cancelled": "Check cancelled.",
+    "unsupported": "Send a photo or an image file.",
+    "busy": "Too many unfinished pairs right now. Try again later.",
+    "MATCH": "The checked details match. This is no guarantee that nothing else differs.",
+    "MISMATCH": "Differences found. Check the photo before publishing.",
+    "NEEDS_REVIEW": "Similarity not confirmed, a manual check is needed.\nThis check was not counted: the bot is not sure — look at the marked details.",
+    "UNAVAILABLE": "The check could not be run. Try again later. This check was not counted.",
+    "limit_reached": "Daily check limit reached, try again tomorrow (UTC). The photos were deleted, no check was run.",
+    "free_used_up": "Your free checks are used up: 3 of 3. Paid checks are coming soon, you are on the waitlist. The photos were deleted, no check was run."
   }
 }
