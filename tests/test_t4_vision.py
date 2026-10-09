@@ -11,8 +11,9 @@ import unittest
 from unittest.mock import patch
 
 from app.photo_compare import ProviderUnavailable, run_bot_pair
-from app import vision_compare, vision_request, vision_transport
-from app.vision_request import ImageRejected, build_request, parse_verdict
+from app import vision_compare, vision_core, vision_request, vision_transport
+from app.vision_request import AnswerError, ImageRejected
+from core_t2 import photo_compare_t2_candidate as t2
 from app.vision_transport import TransportConfigError, make_transport
 
 JPEG = b"\xff\xd8\xff\xe0" + b"SECRETJPEGBYTES" * 4
@@ -40,14 +41,6 @@ def fake_call_provider(request, transport, environ, logger):
     return reply["body"]
 
 
-def answer(verdict="MATCH", reasons=("same logo",), usage=None, **choice):
-    body = {"choices": [{"message": {"content": json.dumps({"verdict": verdict, "reasons": list(reasons)})},
-                         "finish_reason": "stop", **choice}]}
-    if usage is not None:
-        body["usage"] = usage
-    return body
-
-
 class FakeResponse:
     def __init__(self, status=200, data=b"{}"):
         self.status, self.data, self.closed = status, data, False
@@ -70,103 +63,206 @@ class Session:
         self.deleted += 1
 
 
+INV = [{"attribute_id": "button.count", "claim": "Two buttons.", "reference_roi": [100, 100, 300, 400]},
+       {"attribute_id": "print.layout", "claim": "Logo centred.", "reference_roi": [500, 100, 300, 400]}]
+
+
+def chat(content, usage=None, finish="stop"):
+    text = content if isinstance(content, str) else json.dumps(content)
+    body = {"choices": [{"message": {"content": text}, "finish_reason": finish}]}
+    if usage is not None:
+        body["usage"] = usage
+    return body
+
+
+def result(attr, verdict="MATCH", evidence="DIRECT"):
+    return {"attribute_id": attr["attribute_id"], "verdict": verdict, "evidence_quality": evidence,
+            "reference_roi": None if verdict == "NOT_VISIBLE_IN_REFERENCE" else attr["reference_roi"],
+            "candidate_roi": [120, 90, 300, 400], "observation": "Same in both."}
+
+
+def compare_answer(sha, overrides=None, unmapped=(), attrs=INV):
+    overrides = overrides or {}
+    return {"schema_version": "photo-compare/2", "inventory_sha256": sha,
+            "results": [result(a, *overrides.get(a["attribute_id"], ())) for a in attrs],
+            "unmapped_candidate_elements": list(unmapped)}
+
+
+def parts_of(request):
+    return request["messages"][0]["content"]
+
+
+class FakeModel:
+    """A fake transport that plays the model: inventory call, then two compare calls.
+
+    per_order[i] is (overrides, unmapped) for the i-th compare call; `mutate` may edit
+    the answer dict; `fail_at` is a stage index (0 inventory, 1/2 compare) that returns
+    the given reply instead.
+    """
+    def __init__(self, per_order=((None, ()), (None, ())), inventory=INV, usage=None,
+                 fail_at=None, reply=None, mutate=None):
+        self.per_order, self.inventory, self.usage = per_order, inventory, usage
+        self.fail_at, self.reply, self.mutate = fail_at, reply, mutate
+        self.requests = []
+
+    def __call__(self, request, headers, timeout):
+        index = len(self.requests)
+        self.requests.append(request)
+        if self.fail_at == index:
+            if isinstance(self.reply, BaseException):
+                raise self.reply
+            return self.reply
+        parts = parts_of(request)
+        if sum(p["type"] == "image_url" for p in parts) == 1:
+            return {"status": 200, "body": chat({"attributes": self.inventory}, self.usage)}
+        sha = next(p["text"].split(": ", 1)[1] for p in parts if p["text"].startswith("inventory_sha256: "))
+        overrides, unmapped = self.per_order[index - 1]
+        answer = compare_answer(sha, overrides, unmapped)
+        if self.mutate:
+            self.mutate(index, answer)
+        return {"status": 200, "body": chat(answer, self.usage)}
+
+
 class RequestTests(unittest.TestCase):
-    def test_shape(self):
-        req = build_request(JPEG, PNG, "m/x")
-        self.assertEqual(req["model"], "m/x")
-        self.assertEqual(req["temperature"], 0)
+    def test_inventory_request_shape(self):
+        req = vision_request.build_inventory_request(JPEG, "m/x")
+        self.assertEqual((req["model"], req["temperature"]), ("m/x", 0))
         self.assertEqual(req["response_format"], {"type": "json_object"})
         self.assertEqual(req["reasoning"], {"effort": "minimal"})
-        parts = req["messages"][0]["content"]
-        urls = [p["image_url"]["url"] for p in parts if p["type"] == "image_url"]
-        self.assertEqual(len(urls), 2)
-        self.assertTrue(urls[0].startswith("data:image/jpeg;base64,"))
-        self.assertTrue(urls[1].startswith("data:image/png;base64,"))
-        self.assertNotEqual(urls[0], urls[1])
-        text = parts[0]["text"]
-        for word in ("shape", "colour", "logo", "proportions", "details", "background",
-                     "lighting", "angle", "NEEDS_REVIEW", "reasons"):
-            self.assertIn(word, text)
-        # reference first, candidate second
-        self.assertLess(parts.index({"type": "image_url", "image_url": {"url": urls[0]}}),
-                        parts.index({"type": "image_url", "image_url": {"url": urls[1]}}))
+        images = [p for p in parts_of(req) if p["type"] == "image_url"]
+        self.assertEqual(len(images), 1)
+        self.assertTrue(images[0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        self.assertIn("do not invent", parts_of(req)[0]["text"])
 
-    def test_webp_accepted_and_roundtrip(self):
+    def test_compare_requests_swap_positions_not_roles(self):
         import base64
-        req = build_request(WEBP, JPEG, "m")
-        url = req["messages"][0]["content"][2]["image_url"]["url"]
-        self.assertTrue(url.startswith("data:image/webp;base64,"))
-        self.assertEqual(base64.b64decode(url.split(",", 1)[1]), WEBP)  # not re-encoded
+        validated = vision_core.parse_inventory(chat({"attributes": INV}))
+        first, second = vision_core.build_compare_requests(validated, JPEG, PNG, "m/x")
+        for req in (first, second):
+            self.assertEqual((req["model"], req["temperature"]), ("m/x", 0))
+            self.assertEqual(req["response_format"], {"type": "json_object"})
+            self.assertEqual(req["reasoning"], {"effort": "minimal"})
+            self.assertEqual(sum(p["type"] == "image_url" for p in parts_of(req)), 2)
+            text = parts_of(req)[0]["text"]
+            for word in ("shape", "colour", "logo", "proportions", "background", "lighting", "angle"):
+                self.assertIn(word, text)
+
+        def layout(req):
+            out, label = [], None
+            for p in parts_of(req):
+                if p["type"] == "text" and p["text"].startswith("Image "):
+                    label = p["text"]
+                elif p["type"] == "image_url":
+                    out.append((label.split("role=")[1], base64.b64decode(p["image_url"]["url"].split(",")[1])))
+            return out
+        self.assertEqual(layout(first), [("reference", JPEG), ("candidate", PNG)])
+        self.assertEqual(layout(second), [("candidate", PNG), ("reference", JPEG)])
+        def inv_of(req):
+            return [p["text"] for p in parts_of(req) if p["type"] == "text" and p["text"].startswith("inventory")]
+        inv = inv_of(first)
+        self.assertEqual(inv, inv_of(second))
+        self.assertIn("inventory_sha256: " + validated["sha256"], inv)
 
     def test_rejections(self):
         for bad, code in ((b"GIF89a....", "NOT_IMAGE"), (b"%PDF-1.4", "NOT_IMAGE"), (b"", "EMPTY"),
                           (None, "EMPTY"), ("text", "EMPTY"), (b"RIFF\0\0\0\0WAVE", "NOT_IMAGE")):
-            for pos in (0, 1):
-                args = [JPEG, JPEG]
-                args[pos] = bad
-                with self.assertRaises(ImageRejected) as cm:
-                    build_request(*args, "m")
-                self.assertEqual(cm.exception.args[0], code)
+            with self.assertRaises(ImageRejected) as cm:
+                vision_request.build_inventory_request(bad, "m")
+            self.assertEqual(cm.exception.args[0], code)
+        validated = vision_core.parse_inventory(chat({"attributes": INV}))
+        for args in ((b"GIF89a", PNG), (JPEG, b"GIF89a")):
+            with self.assertRaises(ImageRejected):
+                vision_core.build_compare_requests(validated, *args, "m")
+
+    def test_webp_accepted_and_not_reencoded(self):
+        import base64
+        req = vision_request.build_inventory_request(WEBP, "m")
+        url = parts_of(req)[2]["image_url"]["url"]
+        self.assertTrue(url.startswith("data:image/webp;base64,"))
+        self.assertEqual(base64.b64decode(url.split(",", 1)[1]), WEBP)
 
     def test_size_cap_boundary(self):
         big = JPEG + b"\0" * 100
-        build_request(big, JPEG, "m", max_image_bytes=len(big))
+        vision_request.build_inventory_request(big, "m", max_image_bytes=len(big))
         with self.assertRaises(ImageRejected) as cm:
-            build_request(big, JPEG, "m", max_image_bytes=len(big) - 1)
+            vision_request.build_inventory_request(big, "m", max_image_bytes=len(big) - 1)
         self.assertEqual(cm.exception.args[0], "TOO_LARGE")
+        validated = vision_core.parse_inventory(chat({"attributes": INV}))
         with self.assertRaises(ImageRejected):
-            build_request(JPEG, big, "m", max_image_bytes=len(big) - 1)
+            vision_core.build_compare_requests(validated, JPEG, big, "m", max_image_bytes=len(big) - 1)
         self.assertEqual(vision_request.MAX_IMAGE_BYTES, 8 * 1024 * 1024)
 
     def test_error_text_has_no_bytes(self):
         try:
-            build_request(b"GIF89a" + b"PRIVATE", JPEG, "m")
+            vision_request.build_inventory_request(b"GIF89a" + b"PRIVATE", "m")
         except ImageRejected as exc:
             self.assertNotIn("PRIVATE", repr(exc))
 
     def test_model_required(self):
         for m in ("", "  ", None):
             with self.assertRaises(ValueError):
-                build_request(JPEG, PNG, m)
+                vision_request.build_inventory_request(JPEG, m)
 
 
-class ParseTests(unittest.TestCase):
-    def test_verdicts(self):
-        for v in ("MATCH", "MISMATCH", "NEEDS_REVIEW"):
-            self.assertEqual(parse_verdict(answer(v, ("a", "b"))), {"status": v, "reasons": ["a", "b"]})
-        self.assertEqual(parse_verdict(answer("MATCH", ()))["status"], "MATCH")
+class CoreTests(unittest.TestCase):
+    def test_inventory_good(self):
+        v = vision_core.parse_inventory(chat({"attributes": INV}))
+        self.assertEqual(v["attribute_ids"], ["button.count", "print.layout"])
+        self.assertEqual(v["reference_photo_id"], "reference")
+        self.assertEqual(v["sha256"], t2.sha256_hex(v["inventory"]))
 
-    def test_vocabulary_is_subset_of_t2(self):
-        from core_t2.photo_compare_t2_candidate import AGGREGATE_OUTCOMES
-        self.assertTrue(set(vision_request.VERDICTS) <= set(AGGREGATE_OUTCOMES))
-
-    def test_unavailable_cases(self):
-        def content(c, **kw):
-            return {"choices": [{"message": {"content": c}, **kw}]}
-        cases = [None, [], "x", {}, {"choices": []}, {"choices": [None]}, {"choices": [{}]},
-                 {"choices": [{"message": None}]}, content(None), content(""), content("  "),
-                 content("not json"), content("[]"), content('"MATCH"'), content("{}"),
-                 content('{"verdict":"match","reasons":[]}'), content('{"verdict":"ASYMMETRIC_PASS","reasons":[]}'),
-                 content('{"verdict":["MATCH"],"reasons":[]}'), content('{"verdict":"UNAVAILABLE","reasons":[]}'),
-                 content('{"verdict":"MATCH","reasons":[]}', finish_reason="length"),
-                 content('{"verdict":"MATCH","reasons":[]}', finish_reason="content_filter"),
-                 content(' NaN'), content('MATCH')]
+    def test_inventory_bad(self):
+        a = dict(INV[0])
+        cases = [chat("nope"), {}, chat({"attributes": []}), chat({"attributes": "x"}), chat({"attributes": INV, "x": 1}),
+                 chat({"attributes": [a, a]}), chat({"attributes": [{**a, "reference_roi": [900, 100, 300, 400]}]}),
+                 chat({"attributes": [{**a, "confidence": 1}]}), chat({"attributes": [{**a, "claim": ""}]}),
+                 chat({"attributes": [{**INV[0], "attribute_id": "a%d" % i} for i in range(13)]}),
+                 chat({"attributes": INV}, finish="length"), chat([1])]
         for body in cases:
-            with self.subTest(body=body):
-                self.assertEqual(parse_verdict(body)["status"], "UNAVAILABLE")
+            with self.subTest(body=body), self.assertRaises(AnswerError):
+                vision_core.parse_inventory(body)
+        ok = [{**INV[0], "attribute_id": "a%d" % i} for i in range(12)]
+        vision_core.parse_inventory(chat({"attributes": ok}))
 
-    def test_sloppy_answer_never_gives_match_or_mismatch(self):
-        for verdict in ("MATCH", "MISMATCH"):
-            for extra in ('"reasons":"same"', '"reasons":[1]', '"reasons":[""]', '"reasons":[' + '"a",' * 8 + '"a"]',
-                          '"reasons":["' + "x" * 201 + '"]', '"reasons":[],"extra":1', '"x":1'):
-                body = {"choices": [{"message": {"content": '{"verdict":"%s",%s}' % (verdict, extra)}}]}
-                with self.subTest(extra=extra):
-                    self.assertEqual(parse_verdict(body)["status"], "NEEDS_REVIEW")
-        body = {"choices": [{"message": {"content": '{"verdict":"MATCH"}'}}]}
-        self.assertEqual(parse_verdict(body)["status"], "NEEDS_REVIEW")
+    def test_compare_validated_by_t2(self):
+        v = vision_core.parse_inventory(chat({"attributes": INV}))
+        good = compare_answer(v["sha256"])
+        self.assertEqual(vision_core.parse_compare(chat(good), v), good)
+        bad = []
+        x = compare_answer(v["sha256"]); x["inventory_sha256"] = "0" * 64; bad.append(x)
+        x = compare_answer(v["sha256"]); x["results"].pop(); bad.append(x)
+        x = compare_answer(v["sha256"]); x["results"][0]["confidence"] = 1; bad.append(x)
+        x = compare_answer(v["sha256"], {"button.count": ("MATCH", "NONE")}); bad.append(x)
+        x = compare_answer(v["sha256"]); x["results"][0]["attribute_id"] = "invented"; bad.append(x)
+        x = compare_answer(v["sha256"]); x["schema_version"] = "photo-compare/1"; bad.append(x)
+        x = compare_answer(v["sha256"]); x["results"][0]["observation"] = "x" * 161; bad.append(x)
+        for payload in bad:
+            with self.subTest(payload=payload), self.assertRaises(AnswerError):
+                vision_core.parse_compare(chat(payload), v)
 
-    def test_reason_limits_accepted_at_boundary(self):
-        self.assertEqual(parse_verdict(answer("MATCH", ["x" * 200] * 8))["status"], "MATCH")
+    def test_rollup_table(self):
+        r = vision_core.rollup
+        none, rev = "NO_UNMAPPED_EVIDENCE", "NEEDS_REVIEW"
+        cases = [({"a": "MATCH"}, none, "MATCH"), ({"a": "MATCH", "b": "MATCH"}, none, "MATCH"),
+                 ({"a": "MATCH", "b": "MISMATCH"}, none, "MISMATCH"),
+                 ({"a": "ASYMMETRIC_PASS", "b": "MISMATCH"}, rev, "MISMATCH"),
+                 ({"a": "MATCH"}, "MISMATCH", "MISMATCH"), ({"a": "MATCH"}, rev, "NEEDS_REVIEW"),
+                 ({"a": "MATCH", "b": "NEEDS_REVIEW"}, none, "NEEDS_REVIEW"),
+                 ({"a": "MATCH", "b": "ASYMMETRIC_PASS"}, none, "NEEDS_REVIEW"),
+                 ({"a": "NOT_VISIBLE_IN_REFERENCE"}, none, "NEEDS_REVIEW"), ({}, none, "NEEDS_REVIEW")]
+        for attrs, cov, want in cases:
+            with self.subTest(attrs=attrs, cov=cov):
+                self.assertEqual(r({"attributes": attrs, "coverage": cov, "escalations": {}}), want)
+
+    def test_uses_t2_aggregator(self):
+        with patch.object(t2, "aggregate_responses", return_value={"attributes": {"a": "MISMATCH"},
+                                                                    "coverage": "NO_UNMAPPED_EVIDENCE",
+                                                                    "escalations": {}}) as agg:
+            v = vision_core.parse_inventory(chat({"attributes": INV}))
+            sha = v["sha256"]
+            status = vision_core.decide(compare_answer(sha), compare_answer(sha))
+        self.assertEqual(status, "MISMATCH")
+        agg.assert_called_once()
 
 
 class TransportTests(unittest.TestCase):
@@ -334,87 +430,130 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(send.call_args.args[1]["text"], bot.TEXTS["ru"]["fallback"])
 
 
+BOX = [300, 300, 200, 200]
+EXTRA = {"candidate_roi": BOX, "description": "extra pocket", "visibility_in_reference": "VISIBLE_AND_ABSENT"}
+
+
 class ChainTests(unittest.TestCase):
-    def chain(self, body=None, status=200, exc=None, env=ENV):
-        calls = []
-
-        def transport(request, headers, timeout):
-            calls.append((request, headers))
-            if exc:
-                raise exc
-            return {"status": status, "body": body}
-        compare = vision_compare.compare_from_env(env, call_provider=fake_call_provider, transport=transport)
-        return compare, calls
-
-    def run_pair(self, compare):
+    def run_chain(self, model, env=ENV, call_provider=fake_call_provider):
+        compare = vision_compare.compare_from_env(env, call_provider=call_provider, transport=model)
         session = Session()
         result = run_bot_pair(session, compare, None)
         self.assertEqual(session.deleted, 1)
-        return result
+        return result["status"]
 
-    def test_match_and_mismatch(self):
-        for verdict in ("MATCH", "MISMATCH", "NEEDS_REVIEW"):
-            compare, calls = self.chain(answer(verdict))
-            result = self.run_pair(compare)
-            self.assertEqual(result, {"schema_version": "photo-bot-result/1", "status": verdict})
-            self.assertEqual(len(calls), 1)
-            self.assertEqual(calls[0][0]["model"], "google/gemini-3.6-flash")
-            self.assertEqual(calls[0][1]["Authorization"], "Bearer " + KEY)
+    def test_consistent_match(self):
+        model = FakeModel()
+        self.assertEqual(self.run_chain(model), "MATCH")
+        self.assertEqual(len(model.requests), 3)  # inventory + two orders
+        self.assertTrue(all(r["model"] == "google/gemini-3.6-flash" for r in model.requests))
 
-    def test_failures_are_unavailable(self):
-        for kw in ({"body": None, "status": 503}, {"body": None}, {"body": {}}, {"body": {"choices": "x"}},
-                   {"exc": TimeoutError("t")}, {"body": answer("MATCH"), "status": 302},
-                   {"body": answer("MATCH"), "env": {k: v for k, v in ENV.items() if k != "VISION_API_KEY"}}):
-            with self.subTest(kw=kw):
-                compare = self.chain(**kw)[0]
-                if compare is None:  # key missing: disabled, the old path
-                    continue
-                self.assertEqual(self.run_pair(compare)["status"], "UNAVAILABLE")
+    def test_consistent_mismatch(self):
+        both = ({"print.layout": ("MISMATCH", "DIRECT")}, ())
+        self.assertEqual(self.run_chain(FakeModel(per_order=(both, both))), "MISMATCH")
+
+    def test_order_swap_disagreement_needs_review(self):
+        a = ({"print.layout": ("MISMATCH", "DIRECT")}, ())
+        self.assertEqual(self.run_chain(FakeModel(per_order=((None, ()), a))), "NEEDS_REVIEW")
+        self.assertEqual(self.run_chain(FakeModel(per_order=(a, (None, ())))), "NEEDS_REVIEW")
+
+    def test_weak_evidence_and_not_visible_need_review(self):
+        for state in (("MATCH", "PARTIAL"), ("NOT_VISIBLE_IN_REFERENCE", "PARTIAL")):
+            o = ({"button.count": state}, ())
+            self.assertEqual(self.run_chain(FakeModel(per_order=(o, o))), "NEEDS_REVIEW")
+
+    def test_unmapped_element_coverage(self):
+        both = (None, (EXTRA,))
+        self.assertEqual(self.run_chain(FakeModel(per_order=(both, both))), "MISMATCH")
+        self.assertEqual(self.run_chain(FakeModel(per_order=(both, (None, ())))), "NEEDS_REVIEW")
+        occluded = (None, ({**EXTRA, "visibility_in_reference": "OCCLUDED_IN_REFERENCE"},))
+        self.assertEqual(self.run_chain(FakeModel(per_order=(occluded, occluded))), "NEEDS_REVIEW")
+
+    def test_malformed_answers_are_unavailable(self):
+        def drop_result(i, a): a["results"].pop()
+        def bad_sha(i, a): a["inventory_sha256"] = "f" * 64
+        def extra(i, a): a["results"][0]["confidence"] = 1
+        def second_only(i, a):
+            if i == 2: a["results"][0]["evidence_quality"] = "WRONG"
+        for mutate in (drop_result, bad_sha, extra, second_only):
+            with self.subTest(mutate=mutate.__name__):
+                self.assertEqual(self.run_chain(FakeModel(mutate=mutate)), "UNAVAILABLE")
+        for inv in ([], [{"attribute_id": "a"}], "x"):
+            self.assertEqual(self.run_chain(FakeModel(inventory=inv)), "UNAVAILABLE")
+
+    def test_failures_at_each_stage_stop_the_chain(self):
+        for stage in (0, 1, 2):
+            for reply in ({"status": 503, "body": None}, {"status": 200, "body": None}, {"status": 302, "body": {}},
+                          {"status": 200, "body": {"choices": []}}, TimeoutError(KEY)):
+                model = FakeModel(fail_at=stage, reply=reply)
+                with self.subTest(stage=stage, reply=reply):
+                    self.assertEqual(self.run_chain(model), "UNAVAILABLE")
+                    self.assertEqual(len(model.requests), stage + 1)  # nothing is asked after a failure
+
+    def test_compare_itself_never_raises_and_logs_stage_and_code(self):
+        model = FakeModel(mutate=lambda i, a: a["results"].pop())
+        compare = vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)
+        with self.assertLogs("vision", "WARNING") as logs:
+            self.assertEqual(compare(JPEG, PNG), {"status": "UNAVAILABLE"})
+        self.assertEqual(logs.output, ["WARNING:vision:vision_bad_answer stage=compare_a code=BAD_COMPARE"])
 
     def test_non_image_never_reaches_transport(self):
-        compare, calls = self.chain(answer("MATCH"))
-        out = compare(b"%PDF-1.4 private", PNG)
-        self.assertEqual(out["status"], "UNAVAILABLE")
-        self.assertEqual(calls, [])
+        model = FakeModel()
+        compare = vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)
+        self.assertEqual(compare(b"%PDF-1.4 private", PNG)["status"], "UNAVAILABLE")
+        self.assertEqual(compare(JPEG, b"%PDF-1.4 private")["status"], "UNAVAILABLE")
+        self.assertEqual(model.requests, [])
 
     def test_missing_key_double_fails_before_transport(self):
-        calls = []
+        model = FakeModel()
         config = vision_compare.load_config(ENV)
-        compare = vision_compare.make_compare(config, {}, fake_call_provider, lambda *a: calls.append(1))
+        compare = vision_compare.make_compare(config, {}, fake_call_provider, vision_core, model)
         self.assertEqual(compare(JPEG, PNG)["status"], "UNAVAILABLE")
-        self.assertEqual(calls, [])
+        self.assertEqual(model.requests, [])
 
-    def test_usage_logged(self):
-        compare, _ = self.chain(answer("MATCH", usage={"prompt_tokens": 1200, "completion_tokens": 30, "cost": 0.0004}))
+    def test_headers_carry_key(self):
+        seen = []
+        model = FakeModel()
+
+        def spy(request, headers, timeout):
+            seen.append(headers)
+            return model(request, headers, timeout)
+        self.run_chain(spy)
+        self.assertEqual([h["Authorization"] for h in seen], ["Bearer " + KEY] * 3)
+
+    def test_usage_logged_per_call(self):
+        model = FakeModel(usage={"prompt_tokens": 1200, "completion_tokens": 30, "cost": 0.0004})
         with self.assertLogs("vision", "INFO") as logs:
-            compare(JPEG, PNG)
-        self.assertIn("vision_call model=google/gemini-3.6-flash usage_prompt=1200 usage_completion=30 cost=0.0004",
-                      logs.output[0])
+            self.assertEqual(self.run_chain(model), "MATCH")
+        lines = [l for l in logs.output if "vision_call" in l]
+        self.assertEqual(len(lines), 3)
+        for line, stage in zip(lines, ("inventory", "compare_a", "compare_b")):
+            self.assertIn("vision_call model=google/gemini-3.6-flash usage_prompt=1200 usage_completion=30 "
+                          "cost=0.0004 stage=" + stage, line)
 
     def test_usage_absent_or_bad(self):
         for usage in (None, "x", {}, {"prompt_tokens": "9", "completion_tokens": True, "cost": float("nan")}):
-            body = answer("MATCH")
-            if usage is not None:
-                body["usage"] = usage
-            compare, _ = self.chain(body)
             with self.assertLogs("vision", "INFO") as logs:
-                compare(JPEG, PNG)
-            self.assertIn("usage_prompt=n/a usage_completion=n/a cost=n/a", logs.output[0])
+                self.run_chain(FakeModel(usage=usage))
+            self.assertEqual(len(logs.output), 3)
+            for line in logs.output:
+                self.assertIn("usage_prompt=n/a usage_completion=n/a cost=n/a", line)
 
-    def test_logs_hold_no_secret_bytes_or_reasons(self):
+    def test_logs_hold_no_secret_bytes_or_model_text(self):
         import base64
-        reasons = ("PRIVATE-REASON-TEXT",)
-        cases = [(answer("MATCH", reasons, usage={"prompt_tokens": 1}), {}),
-                 ({"body": None, "status": 500}, {}), (None, {"exc": TimeoutError(KEY)})]
-        for body, kw in cases:
-            compare, _ = (self.chain(body) if not kw and body and "choices" in body else
-                          self.chain(**(body if isinstance(body, dict) and "status" in body else {}), **kw))
+        secret_inv = [{**INV[0], "claim": "PRIVATE-CLAIM-TEXT"}, INV[1]]
+        scenarios = [FakeModel(inventory=secret_inv, usage={"prompt_tokens": 1}),
+                     FakeModel(fail_at=1, reply={"status": 500, "body": None}),
+                     FakeModel(fail_at=2, reply=TimeoutError(KEY)),
+                     FakeModel(mutate=lambda i, a: a["results"].pop())]
+        for model in scenarios:
             with self.assertLogs("vision", "DEBUG") as logs:
                 logging.getLogger("vision").info("sentinel")
-                compare(JPEG, PNG)
-                compare(b"%PDF " + PNG, PNG)
+                self.run_chain(model)
+                self.run_chain(FakeModel(fail_at=0, reply={"status": 200, "body": {"choices": [{"message": {"content": KEY}}]}}))
+                vision_compare.compare_from_env(ENV, call_provider=fake_call_provider, transport=model)(b"%PDF " + PNG, PNG)
             text = repr(logs.output)
-            for secret in (KEY, "Authorization", "Bearer", "SECRETJPEGBYTES", "SECRETPNGBYTES", "PRIVATE-REASON-TEXT",
+            for secret in (KEY, "Authorization", "Bearer", "SECRETJPEGBYTES", "SECRETPNGBYTES", "PRIVATE-CLAIM-TEXT",
                            base64.b64encode(JPEG).decode(), base64.b64encode(JPEG).decode()[:16]):
                 self.assertNotIn(secret, text)
 
@@ -425,6 +564,16 @@ class ChainTests(unittest.TestCase):
             vision_compare._provider_sink({"k": KEY})
         self.assertEqual(len(logs.output), 1)
         self.assertNotIn(KEY, repr(logs.output))
+
+    def test_core_missing_disables(self):
+        with patch.object(vision_compare, "_default_core", return_value=None):
+            self.assertIsNone(vision_compare.compare_from_env(ENV, call_provider=fake_call_provider))
+
+    def test_cost_estimate(self):
+        est = vision_compare.estimate_check_cost(0.30, 2.50)
+        self.assertEqual(est["prompt_tokens"], 1100 + 300 + 2 * (2200 + 900))
+        self.assertEqual(est["completion_tokens"], 400 + 1800)
+        self.assertAlmostEqual(est["usd"], (7600 * 0.30 + 2200 * 2.50) / 1e6)
 
     def test_smoke_main_without_config(self):
         self.assertEqual(vision_compare._main(["a", "b"], {}), 2)

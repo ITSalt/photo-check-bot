@@ -1,6 +1,7 @@
 """T4 glue: the `compare(reference, candidate)` callable for run_bot_pair.
 
-build_request -> call_provider (T3b, injected) -> parse_verdict. Enabled only by
+inventory call -> two order-swapped compare calls -> T2 core (app/vision_core.py),
+each call through call_provider (T3b, injected). Enabled only by
 env config; compare_from_env returns None when it is missing, and the bot then
 keeps its current behaviour. Logs carry codes, model name and token/cost numbers
 only: no bytes, hashes, base64, keys, identifiers or provider text.
@@ -11,7 +12,8 @@ import logging
 import re
 
 from app.photo_compare import ProviderUnavailable
-from app.vision_request import ImageRejected, build_request, parse_verdict
+from app.vision_request import (AnswerError, ImageRejected, build_inventory_request,
+                                data_url)
 from app.vision_transport import (MAX_TIMEOUT, TransportConfigError, check_url,
                                   make_transport, parse_allowlist)
 
@@ -69,35 +71,67 @@ def _number(value):
     return value
 
 
-def _log_usage(model, body):
+def _log_usage(model, stage, body):
     usage = body.get("usage") if isinstance(body, dict) else None
     usage = usage if isinstance(usage, dict) else {}
-    log.info("vision_call model=%s usage_prompt=%s usage_completion=%s cost=%s", model,
+    log.info("vision_call model=%s usage_prompt=%s usage_completion=%s cost=%s stage=%s", model,
              _number(usage.get("prompt_tokens")), _number(usage.get("completion_tokens")),
-             _number(usage.get("cost")))
+             _number(usage.get("cost")), stage)
 
 
-def make_compare(config, environ, call_provider, transport=None):
-    """compare(reference, candidate) -> {"status", "reasons"}; never raises ProviderUnavailable."""
+# Unmeasured planning assumptions (tokens), see docs/t4-vision.md. The live smoke test
+# replaces them with the numbers from the vision_call log lines.
+ASSUMED = {"image": 1100, "inventory_prompt": 300, "inventory_out": 400,
+           "compare_prompt": 900, "compare_out": 900}
+
+
+def estimate_check_cost(prompt_usd_per_m, output_usd_per_m, assumed=ASSUMED):
+    """Estimated {"prompt_tokens","completion_tokens","usd"} for one check (3 calls)."""
+    prompt = (assumed["image"] + assumed["inventory_prompt"]
+              + 2 * (2 * assumed["image"] + assumed["compare_prompt"]))
+    out = assumed["inventory_out"] + 2 * assumed["compare_out"]
+    usd = (prompt * prompt_usd_per_m + out * output_usd_per_m) / 1e6
+    return {"prompt_tokens": prompt, "completion_tokens": out, "usd": usd}
+
+
+def make_compare(config, environ, call_provider, core, transport=None):
+    """compare(reference, candidate) -> {"status", ...}; never raises ProviderUnavailable.
+
+    `core` is the app.vision_core module (injected so a missing core_t2 disables
+    the feature instead of breaking import).
+    """
     if transport is None:
         transport = make_transport(config["base_url"], config["timeout"],
                                    host_allowlist=config["allowlist"])
     model = config["model"]
 
+    def ask(stage, request):
+        body = call_provider(request, transport, environ, _provider_sink)
+        _log_usage(model, stage, body)
+        return body
+
     def compare(reference, candidate):
+        unavailable = {"status": "UNAVAILABLE"}
+        stage = "inventory"
         try:
-            request = build_request(reference, candidate, model)
+            data_url(candidate)  # reject a bad candidate before paying for call 1
+            validated = core.parse_inventory(ask(stage, build_inventory_request(reference, model)))
+            first, second = core.build_compare_requests(validated, reference, candidate, model)
+            stage = "compare_a"
+            answer_first = core.parse_compare(ask(stage, first), validated)
+            stage = "compare_b"
+            answer_second = core.parse_compare(ask(stage, second), validated)
+            stage = "decide"
+            return {"status": core.decide(answer_first, answer_second)}
         except ImageRejected as exc:
             log.warning("vision_rejected code=%s", exc.args[0])
-            return {"status": "UNAVAILABLE", "reasons": []}
-        try:
-            body = call_provider(request, transport, environ, _provider_sink)
         except ProviderUnavailable as exc:
             code = str(exc)
-            log.warning("vision_unavailable code=%s", code if _CODE_RE.match(code) else "UNKNOWN")
-            return {"status": "UNAVAILABLE", "reasons": []}
-        _log_usage(model, body)
-        return parse_verdict(body)
+            log.warning("vision_unavailable stage=%s code=%s", stage,
+                        code if _CODE_RE.match(code) else "UNKNOWN")
+        except AnswerError as exc:
+            log.warning("vision_bad_answer stage=%s code=%s", stage, exc.args[0])
+        return unavailable
 
     return compare
 
@@ -110,8 +144,16 @@ def _default_call_provider():
     return call_provider
 
 
-def compare_from_env(environ, *, call_provider=None, transport=None):
-    """The compare callable, or None (not configured, or no T3b available)."""
+def _default_core():
+    try:
+        from app import vision_core
+    except ImportError:  # core_t2/ is not in the current image (Dockerfile copies app/)
+        return None
+    return vision_core
+
+
+def compare_from_env(environ, *, call_provider=None, transport=None, core=None):
+    """The compare callable, or None (not configured, or T3b / the T2 core unavailable)."""
     config = load_config(environ)
     if config is None:
         return None
@@ -119,7 +161,11 @@ def compare_from_env(environ, *, call_provider=None, transport=None):
     if call_provider is None:
         log.warning("vision disabled, call_provider unavailable")
         return None
-    return make_compare(config, environ, call_provider, transport)
+    core = core or _default_core()
+    if core is None:
+        log.warning("vision disabled, T2 core unavailable")
+        return None
+    return make_compare(config, environ, call_provider, core, transport)
 
 
 def _main(argv, environ):
@@ -135,7 +181,7 @@ def _main(argv, environ):
     with open(argv[1], "rb") as f:
         candidate = f.read()
     result = compare(reference, candidate)
-    print(result["status"], "; ".join(result["reasons"]))
+    print(result["status"])
     return 0 if result["status"] != "UNAVAILABLE" else 1
 
 
