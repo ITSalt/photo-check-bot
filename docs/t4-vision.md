@@ -6,9 +6,10 @@ Modules in `app/`:
   HTTPS only, host allowlist, no redirects (3xx is returned as a status, not followed),
   no environment proxies, 1 MiB response cap. `TimeoutError` passes through for T3b.
 - `vision_request.py`: image hygiene (JPEG/PNG/WebP by magic bytes, 8 MiB cap each,
-  nothing re-encoded), the inventory request, and extraction of the model's JSON answer.
+  longest side at most 1536 px read from the header, nothing re-encoded), the inventory
+  request, and extraction of the model's JSON answer.
   `chat_payload` builds every request body (inventory and both compares) with
-  `temperature: 0`, JSON output, minimal reasoning, `"provider": {"data_collection": "deny"}`
+  `temperature: 0`, `max_tokens: 2800`, JSON output, minimal reasoning, `"provider": {"data_collection": "deny"}`
   (D-2: only providers that neither store nor train on the request may serve it) and
   `"usage": {"include": true}` (the reply carries the cost for the spend cap).
 - `vision_core.py`: the chain through the T2 core (`core_t2/`).
@@ -173,8 +174,10 @@ exactly as before:
 
 Per check: the free-check counter allows (3 per user, D-12) -> `reserve()` -> download
 (`app/session_factory.py`, a fresh 0o700 directory under the temp dir) -> compare, with
-`record(usage.cost)` after each provider call (a failed call or a reply without a cost
-counts the 0.02 fallback) -> the counter is charged only on MATCH or MISMATCH (D-11) ->
+`begin()` before each provider call (False: nothing is sent, the check ends UNAVAILABLE,
+not charged, `spend_cap_error code=BEGIN`) and `record(usage.cost)` after it (a failed call
+or a reply without a cost counts the 0.02 fallback; `not_sent()` instead only when the
+transport was never invoked, e.g. `MISSING_KEY`) -> the counter is charged only on MATCH or MISMATCH (D-11) ->
 the reservation is closed. A counter or cap refusal downloads nothing and calls nothing.
 If a check's recorded cost passes its hold (3 x 0.02 USD) or today's ledger total passes the
 cap, its remaining calls are skipped and it ends UNAVAILABLE, not charged (`spend_cap_overrun`).
@@ -209,6 +212,9 @@ request asks for with `"usage": {"include": true}` (`n/a` when a reply lacks it)
 stage=inventory|compare_a|compare_b`. Failures log stage and a public code only
 (`vision_unavailable stage=compare_a code=TIMEOUT`, `vision_bad_answer stage=... code=BAD_COMPARE`,
 `vision_rejected code=NOT_IMAGE`). No identifiers, bytes, hashes, base64, keys or model text.
+Spend cap v2 adds `spend_cap_error code=BEGIN` (a request mark could not be written: nothing
+sent), `spend_cap_orphan hold=<id> day=<day> usd=<usd>` at startup, and the cap's own
+`spend_cap_error code=...` lines with a hold id and amount; hold ids are random, not user data.
 
 ## Cost per check (estimate, not measured)
 
@@ -229,12 +235,91 @@ the spend cap sums those. The smoke test's lines replace the assumptions above. 
 
 ## Spend cap
 
-`app/spend_cap.py` keeps a per-UTC-day ledger (`{"day", "spent_usd"}` only, no identifiers) in
-`DATA_DIR`, written atomically. The cap is `VISION_DAILY_CAP_USD` (default 2.00; an invalid
-value fails closed). A check reserves its worst case before the first provider call; a call
-with no usable cost counts as a fallback of 0.02 USD. One process per ledger: a second one
-fails to take the lock (`SECOND_WRITER`). A corrupt ledger or a refused lock fails closed:
-no provider call. Wired into the bot by WP-BOT-05 (see Wiring above).
+`app/spend_cap.py` (v2.1.1, fable-terminal, D-17) keeps a per-UTC-day ledger in `DATA_DIR`,
+written atomically (file and directory fsync): `{"day", "spent_usd", "holds"}`, where
+`holds` maps a random hold id to `{"day", "usd", "in_flight", "at"}` (`at`: when the hold was
+taken, Unix seconds); no user identifiers. The cap
+is `VISION_DAILY_CAP_USD` (default 2.00; an invalid value fails closed). A check reserves its
+worst case (3 x 0.02 USD) before the first provider call; a call with no usable cost counts as
+a fallback of 0.02 USD. One process per ledger: a second one fails to take the lock
+(`SECOND_WRITER`). Wired into the bot by WP-BOT-05 and WP-BOT-12 (see Wiring above).
+
+v2 semantics (v2.1.1):
+
+- `reserve()` writes the hold to the ledger before it returns; `begin()` writes "one request
+  in flight" before each send. A request never leaves before its liability is on disk.
+- A hold is freed only by evidence: `record(cost)` books a real charge, `not_sent()` says the
+  request provably never left, `close()` frees the rest only when nothing is in flight.
+- A hold found on the ledger at startup belongs to a process that died (or closed with a
+  request out). It is an orphan: logged as `spend_cap_orphan hold=<id> day=<day> usd=<usd>`,
+  counted in full for its day, never released automatically. It stops counting only when its
+  day is over AND it is older than `orphan_lifetime_s` (default 600 s, at least 2 x the 30 s
+  client timeout; the bot uses the default), so a request still billing across midnight keeps
+  its hold.
+- A v1 ledger (`{"day", "spent_usd"}`) is read as having no holds, with its total kept; a v2
+  hold without `at` is read as taken at the end of its day.
+- Fails closed (no provider call): an unreadable or changed ledger, a clock that went back past
+  the ledger's day, a failed write. `cap.state` is `ready` or `failed`, `cap.fail_code` says
+  why (`LEDGER_CORRUPT`, `LOCK_WITHOUT_LEDGER`, `LEDGER_CHANGED`, `LEDGER_UNREADABLE`,
+  `CLOCK_BACKWARDS`, `CLOSED`). If it is not `ready` at startup the bot logs
+  `vision disabled, code=<fail_code>` and runs without checks.
+
+Orphan recovery (operator). Look up the real cost of the requests made around the orphan's
+time in the OpenRouter activity log, then settle it with the bot stopped (the bot holds the
+lock), on the VPS in `~/app`, with the id from the log line and the cost in USD:
+
+```bash
+docker compose stop bot && docker compose run --rm bot python -c "from app.spend_cap import SpendCap; c = SpendCap('/data/spend_cap.json', 0); print(c.settle('HOLD_ID', REAL_COST_USD)); c.close()" && docker compose start bot
+```
+
+It prints `settled` (the hold is dropped and the cost booked), `unknown` (no such orphan, e.g.
+already expired; the cost is still booked today) or `live`. Not settling is safe: the orphan
+blocks only its own day's budget.
+
+Lock without ledger = vision off. If `DATA_DIR` has `spend_cap.json.lock` but no
+`spend_cap.json` (the ledger was deleted, or a v1 volume where no cost was ever recorded), the
+cap cannot tell what was spent: the bot logs `vision disabled, code=LOCK_WITHOUT_LEDGER` and
+runs without checks. A corrupt ledger logs `vision disabled, code=LEDGER_CORRUPT` and is left
+untouched for a human to look at. To reset, stop the bot and remove both files
+(`spend_cap.json` and `spend_cap.json.lock`); this forgets today's spend.
+
+Post-deploy check: the log has `vision enabled`; note any `spend_cap_orphan` lines;
+`cat /data/spend_cap.json` shows `"holds": {}` while no check is running.
+
+## Per-call cost ceiling (WP-BOT-12 criterion 4)
+
+Credit: gpb-agent-7a28a9f720 and zenith-claude (board ae90ed2b). The hold of 0.02 USD per call
+is a real ceiling only if one call cannot cost more. The constants and their arithmetic are in
+`app/vision_request.py`; `tests/test_call_ceiling.py` recomputes them.
+
+- Pricing basis (pinned): OpenRouter `/api/v1/models`, `google/gemini-3.6-flash`, 09.10.2026:
+  input (prompt and images) 0.75 USD/M tokens, output (completion and internal reasoning)
+  3.75 USD/M. The test fails when `VISION_MODEL` in `deploy.yml` is another model.
+- Output: `max_tokens: 2800` in every request. On this route it bounds all completion tokens,
+  reasoning included (live check, 09.10.2026, `max_tokens=40`: effort minimal and effort high
+  both ended `finish_reason=length` with 36 completion tokens, 34 of them reasoning in the
+  second, same cost). A cut-off reply (`finish_reason: "length"`) is billed: its cost (or the
+  0.02 fallback) is recorded and the check ends UNAVAILABLE (`code=CUT_OFF`), not charged.
+- Images: longest side at most 1536 px, read from the file header (`app/intake/sniff.py`),
+  nothing re-encoded. For a Telegram photo the bot takes the largest size variant within the
+  limit (normally Telegram's 1280 px one); an image sent as a document with a longer side, or
+  with a header that cannot be read, is refused before any call (`vision_rejected
+  code=SIDE_TOO_LONG` / `NO_SIZE`, the check is UNAVAILABLE and not charged). Instead of the
+  generic UNAVAILABLE text the seller gets one line saying what to do: `image_too_large`
+  («Фото слишком большое для проверки — пришлите его как фото, а не файлом.»; also for the
+  8 MiB byte cap) or `image_unreadable` («Не могу прочитать это изображение — пришлите его
+  как фото.»), ru/en in `app/bot_texts.json`. Worst case per
+  image: 3,096 tokens (Gemini 2.x tiling at 1536 x 385; Gemini 3 "high" is 1,120). This is a
+  planning bound from public rules, not measured on this model: the `usage_prompt` numbers of
+  the `vision_call` lines show the real count.
+- Text: at most 6,000 UTF-8 bytes of prompt per request (`PROMPT_TOO_LONG` otherwise; today's
+  largest is about 4,500), at most two images; one token covers at least one byte.
+- Worst case of one call: (2 x 3,096 + 6,000 + 300 overhead) x 0.75 / 1e6 + 2,800 x 3.75 / 1e6
+  = 0.019869 USD, within the 0.02 hold.
+
+The image limit changes what the model sees: a Telegram photo that also comes in a larger
+variant (Telegram's 2560 px one) is now checked at 1280 px, and documents above 1536 px are
+refused. The WP-BOT-07 controls must run (or be re-run) on the code after this change.
 
 ## Privacy note for the bot text
 
@@ -294,3 +379,8 @@ config. Uses the real T3b `call_provider`; needs `core_t2/` and `core_t3/` on th
 runs through the real `core_t3` `call_provider`, and a spy test asserts it is called once
 per stage). `tests/test_image_layout.py` rebuilds `/app` from the Dockerfile's `COPY`
 lines and imports the chain there.
+`tests/test_call_ceiling.py` covers the per-call ceiling (WP-BOT-12 criterion 4) and
+`tests/test_spend_cap_v2_wiring.py` the spend cap v2 wiring (begin, not_sent, a process
+killed between begin and record, v1 ledger, orphan settle, settle closing the reservation).
+Spend cap mutants (fable-terminal; not run by CI, each must print `killed`):
+`python3 tests/mutation/spend_cap_mutants.py`.

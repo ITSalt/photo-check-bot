@@ -17,9 +17,26 @@ from core_t2 import photo_compare_t2_candidate as t2
 from core_t3 import photo_compare_t3_candidate as t3
 from app.vision_transport import TransportConfigError, make_transport
 
-JPEG = b"\xff\xd8\xff\xe0" + b"SECRETJPEGBYTES" * 4
-PNG = b"\x89PNG\r\n\x1a\n" + b"SECRETPNGBYTES" * 4
-WEBP = b"RIFF\x10\x00\x00\x00WEBP" + b"SECRETWEBPBYTES"
+def jpeg(w, h, tail=b""):
+    """SOI + a baseline SOF0 header of w x h (what app/intake/sniff.py reads) + tail."""
+    return (b"\xff\xd8\xff\xc0\x00\x11\x08" + h.to_bytes(2, "big") + w.to_bytes(2, "big")
+            + b"\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01" + tail)
+
+
+def png(w, h, tail=b""):
+    return (b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + w.to_bytes(4, "big") + h.to_bytes(4, "big")
+            + b"\x08\x02\x00\x00\x00\x00\x00\x00\x00" + tail)
+
+
+def webp(w, h, tail=b""):
+    return (b"RIFF\x10\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x00\x00\x00\x00"
+            + (w - 1).to_bytes(3, "little") + (h - 1).to_bytes(3, "little") + tail)
+
+
+# Telegram's largest photo variant is 1280 px on its longest side.
+JPEG = jpeg(1280, 960, b"SECRETJPEGBYTES" * 4)
+PNG = png(960, 1280, b"SECRETPNGBYTES" * 4)
+WEBP = webp(1024, 1024, b"SECRETWEBPBYTES")
 KEY = "sk-top-secret-key"
 URL = "https://openrouter.ai/api/v1/chat/completions"
 ENV = {"VISION_BASE_URL": URL, "VISION_MODEL": "google/gemini-3.6-flash",

@@ -14,6 +14,8 @@ LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1
           "cancelled": 300, "unsupported": 300, "busy": 300, "MATCH": 300, "MISMATCH": 300,
           "NEEDS_REVIEW": 400, "UNAVAILABLE": 300, "limit_reached": 300, "free_used_up": 400,
           "uncharged_limit": 300,
+          # image refused before any provider call (WP-BOT-12 4b)
+          "image_too_large": 300, "image_unreadable": 300,
           # /forget replies (app/bot.py, WP-BOT-09)
           "forget_done": 300, "forget_failed": 300}
 REQUIRED = set(LIMITS) - {"short_description", "description"}

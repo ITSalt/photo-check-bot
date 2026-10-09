@@ -1,4 +1,14 @@
+from app.vision_request import MAX_IMAGE_SIDE
+
 IMPLEMENTED = True
+
+
+def _fits(p):
+    """A photo variant whose declared longest side is within the vision input limit."""
+    w, h = p.get("width"), p.get("height")
+    return (type(w) is int and type(h) is int and 0 < w and 0 < h
+            and max(w, h) <= MAX_IMAGE_SIDE)
+
 
 def parse_update(update):
     message = update.get("message")
@@ -27,7 +37,11 @@ def parse_update(update):
         photos = message["photo"]
         def size_key(p):
             return p.get("file_size") or (p.get("width", 0) * p.get("height", 0))
-        best_photo = max(photos, key=size_key)
+        # WP-BOT-12 4b: the largest variant within MAX_IMAGE_SIDE (Telegram sends several
+        # sizes), so the provider input stays bounded without re-encoding; with none
+        # within it, the largest, which app/vision_request.py then refuses.
+        fitting = [p for p in photos if _fits(p)]
+        best_photo = max(fitting or photos, key=size_key)
         result["kind"] = "photo"
         result["file_id"] = best_photo["file_id"]
         result["file_size"] = best_photo.get("file_size")

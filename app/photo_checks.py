@@ -19,7 +19,9 @@ from app.verdict_notes import format_notes
 TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(encoding="utf-8"))
 KEYS = ('ask_generated', 'ask_real', 'expired', 'cancelled', 'unsupported', 'busy',
         'MATCH', 'MISMATCH', 'NEEDS_REVIEW', 'UNAVAILABLE', 'limit_reached', 'free_used_up', 'uncharged_limit',
-        'welcome_checks', 'privacy')
+        'welcome_checks', 'privacy', 'image_too_large', 'image_unreadable')
+# Reasons a compare result may carry with UNAVAILABLE (app/vision_compare.py IMAGE_REASONS).
+IMAGE_REASONS = ('image_too_large', 'image_unreadable')
 MESSAGES = {key: TEXTS['ru'][key] for key in KEYS}
 PRIVACY_COMMANDS = ('help', 'privacy')
 
@@ -116,6 +118,10 @@ class PhotoChecks:
             if ticket is not None:
                 self.gate.settle(ticket, status)
         reply = text[status]
+        if (status == 'UNAVAILABLE' and seen and isinstance(seen[0], dict)
+                and seen[0].get('reason') in IMAGE_REASONS):
+            # An image refused before any provider call: say why and what to send instead.
+            return text[seen[0]['reason']]
         if seen and isinstance(seen[0], dict) and seen[0].get('status') == status:
             notes = format_notes(seen[0], lang)
             reply = reply + ' ' + notes if notes else reply

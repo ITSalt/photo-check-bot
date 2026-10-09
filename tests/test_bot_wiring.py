@@ -67,13 +67,15 @@ class FakeTelegram:
 
 
 class FakeCompare:
-    """compare_factory for build_photo_checks: three 'calls' per check, each reported to on_call."""
+    """compare_factory for build_photo_checks: three 'calls' per check, each marked with
+    on_begin before it and reported to on_call after it (spend cap v2)."""
     def __init__(self, test, result, costs=(0.001, 0.002, 0.003), obey=True):
         self.test, self.result, self.costs, self.obey = test, result, costs, obey
         self.calls, self.on_call, self.provider_calls = [], None, 0
+        self.on_begin = self.on_not_sent = None
 
-    def __call__(self, environ, *, on_call=None):
-        self.on_call = on_call
+    def __call__(self, environ, *, on_call=None, on_begin=None, on_not_sent=None):
+        self.on_call, self.on_begin, self.on_not_sent = on_call, on_begin, on_not_sent
         return self.compare
 
     def compare(self, reference, candidate):
@@ -82,6 +84,8 @@ class FakeCompare:
         self.test.assertEqual(len(os.listdir(self.test.photo_dir)), 1)
         self.calls.append(1)
         for cost in self.costs:
+            if self.on_begin() is False:
+                return {"status": "UNAVAILABLE"}
             self.provider_calls += 1
             if self.on_call(cost) is False and self.obey:
                 return {"status": "UNAVAILABLE"}
@@ -137,6 +141,13 @@ class WiringBase(unittest.TestCase):
     def used(self, checks, user=USER):
         return checks.gate.counter.used(user)
 
+    def ledger(self):
+        return json.loads(pathlib.Path(os.path.join(self.data_dir, "spend_cap.json")).read_text(encoding="utf-8"))
+
+    def holds(self):
+        """Open holds on the spend cap v2 ledger: {} once every reservation is closed."""
+        return self.ledger()["holds"]
+
 
 class StatusTests(WiringBase):
     """AC1, AC5: reply per status, photo dir empty, counter only on MATCH / MISMATCH."""
@@ -160,7 +171,7 @@ class StatusTests(WiringBase):
                     self.assertEqual(fake.calls, [1])
                     self.assertEqual(os.listdir(self.photo_dir), [])
                     self.assertEqual(self.used(checks), charged)
-                    self.assertEqual(checks.gate.cap._held, 0)   # reservation closed
+                    self.assertEqual(self.holds(), {})   # reservation closed
 
     def test_needs_review_reply_carries_d11_line_and_to_check_list(self):
         for lang, line, item in (("ru", D11_RU, "Проверьте сами: застёжка (не видно)."),
@@ -180,7 +191,7 @@ class StatusTests(WiringBase):
             sent = self.pair(checks)
         self.assertEqual(sent, [TEXTS["ru"]["ask_real"]])
         self.assertEqual(self.used(checks), 0)
-        self.assertEqual(checks.gate.cap._held, 0)
+        self.assertEqual(self.holds(), {})
         for leftover in os.listdir(self.photo_dir):   # the files themselves were removed
             self.assertEqual(os.listdir(os.path.join(self.photo_dir, leftover)), [])
             real_rmtree(os.path.join(self.photo_dir, leftover))
@@ -197,7 +208,7 @@ class StatusTests(WiringBase):
         self.assertEqual(fake.calls, [])
         self.assertEqual(os.listdir(self.photo_dir), [])
         self.assertEqual(self.used(checks), 0)
-        self.assertEqual(checks.gate.cap._held, 0)
+        self.assertEqual(self.holds(), {})
 
 
 class FreeCounterTests(WiringBase):
@@ -323,7 +334,7 @@ class SpendCapTests(WiringBase):
         self.assertIn("spend_cap_overrun", "\n".join(logs.output))
         self.assertEqual(self.used(checks), 0)
         self.assertEqual(os.listdir(self.photo_dir), [])
-        self.assertEqual(checks.gate.cap._held, 0)
+        self.assertEqual(self.holds(), {})
 
     def test_overrun_on_last_call_is_still_unavailable(self):
         fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.01, 0.01, 0.05), obey=False)
@@ -332,22 +343,27 @@ class SpendCapTests(WiringBase):
         self.assertEqual(self.used(checks), 0)
 
     def test_day_total_past_cap_stops_the_check(self):
-        # Today's ledger grows past the cap during the check (e.g. a write by another
-        # source): the check's own total is still under its hold, the day total is not.
+        # Today's ledger goes past the cap while the first request is out (a write by
+        # another source): the check's own total is still under its hold, the day total
+        # is not. Spend cap v2 sees the file changed behind its back (LEDGER_CHANGED),
+        # keeps the record in memory and leaves the file, so the overrun reader sees it.
         fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.001, 0.001, 0.001))
         ledger = os.path.join(self.data_dir, "spend_cap.json")
-        inner = fake.compare
-        def compare(reference, candidate):
-            today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-            pathlib.Path(ledger).write_text(json.dumps({"day": today, "spent_usd": 0.0995}))
-            return inner(reference, candidate)
-        fake.compare = compare
         checks = self.build(fake, env=dict(self.env, VISION_DAILY_CAP_USD="0.10"))
-        with self.assertLogs("vision_wiring", "WARNING") as logs:
+        begin = fake.on_begin
+        def begin_then_foreign_write():
+            ok = begin()
+            today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+            pathlib.Path(ledger).write_text(json.dumps({"day": today, "spent_usd": 0.1005}))
+            return ok
+        fake.on_begin = begin_then_foreign_write
+        with self.assertLogs("vision_wiring", "WARNING") as logs, \
+                self.assertLogs("spend_cap", "ERROR") as cap_logs:
             reply = self.pair(checks)[1]
         self.assertEqual(reply, TEXTS["ru"]["UNAVAILABLE"])
         self.assertEqual(fake.provider_calls, 1)
         self.assertIn("spend_cap_overrun", "\n".join(logs.output))
+        self.assertIn("spend_cap_error code=LEDGER_CHANGED", "\n".join(cap_logs.output))
         self.assertEqual(self.used(checks), 0)
         self.assertEqual(os.listdir(self.photo_dir), [])
 
@@ -408,8 +424,8 @@ class RealChainCostTests(WiringBase):
     """record(usage.cost) after each of the three real provider calls (fake transport)."""
 
     def chain(self, model):
-        return lambda environ, on_call=None: vision_compare.compare_from_env(
-            environ, transport=model, on_call=on_call)
+        return lambda environ, **hooks: vision_compare.compare_from_env(
+            environ, transport=model, **hooks)
 
     def spent(self):
         return json.loads(pathlib.Path(os.path.join(self.data_dir, "spend_cap.json")).read_text(encoding="utf-8"))["spent_usd"]
@@ -445,10 +461,10 @@ class RealChainCostTests(WiringBase):
 
     def test_hook_error_stops_the_chain(self):
         model = FakeModel(usage={"cost": 0.004})
-        def broken_factory(environ, on_call=None):
+        def broken_factory(environ, on_call=None, **hooks):
             def hook(cost):
                 raise RuntimeError("hook")
-            return vision_compare.compare_from_env(environ, transport=model, on_call=hook)
+            return vision_compare.compare_from_env(environ, transport=model, on_call=hook, **hooks)
         checks = self.build(broken_factory)
         self.assertEqual(self.pair(checks)[1], TEXTS["ru"]["UNAVAILABLE"])
         self.assertEqual(len(model.requests), 1)

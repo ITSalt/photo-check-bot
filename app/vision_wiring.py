@@ -9,8 +9,10 @@ here at startup; CapConfigError / SingleWriterError turn the feature off.
 
 CheckGate does the per-check order (D-12, D-11, D-7, WP-BOT-03):
 counter allows -> uncharged daily limit (WP-BOT-10, D-15) -> cap.reserve() before the first provider call -> compare, with
-record(usage.cost) after each provider call -> the counter is charged only on MATCH
-or MISMATCH -> reservation.close() in a finally.
+reservation.begin() before and record(usage.cost) after each provider call (spend cap v2,
+D-17: the hold and each request mark are on disk before anything leaves) -> the counter is
+charged only on MATCH or MISMATCH -> reservation.close() in a finally. At startup every
+hold a previous process left on the ledger is logged as spend_cap_orphan.
 
 Logs carry codes only: no user id, counter key, file id, path, bytes or model text.
 """
@@ -18,6 +20,7 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -45,6 +48,8 @@ def _micro(cost):
 UNCHARGED_LIMIT_ENV = "UNCHARGED_DAILY_LIMIT"
 DEFAULT_UNCHARGED_LIMIT = 10
 CAP_FILE = "spend_cap.json"
+_HOLD_ID_RE = re.compile(r"^[0-9a-f]{32}$")     # spend_cap v2 hold ids are uuid4().hex
+_CODE_RE = re.compile(r"^[A-Z_]{1,32}$")         # spend_cap fail_code values are fixed codes
 PHOTO_DIR = "photo-checks"
 
 
@@ -57,8 +62,9 @@ class Ticket:
 def _ledger_micro(path):
     """Today's total from the spend cap ledger, read only (record() has just written it).
 
-    app/spend_cap.py has no public getter and stays verbatim, so this reads its
-    {"day", "spent_usd"} file. Unreadable or malformed -> None (the caller stops the check).
+    app/spend_cap.py has no public getter and stays verbatim, so this reads the
+    "spent_usd" key of its file (v1 {"day", "spent_usd"}; v2 adds "holds", which are
+    not spent and not read here). Unreadable or malformed -> None (the caller stops the check).
     """
     try:
         with open(path, "rb") as f:
@@ -165,6 +171,26 @@ class CheckGate:
             ticket.overrun = True
         return not ticket.overrun
 
+    def begin_call(self):
+        """The compare chain's pre-send hook (spend cap v2, D-17): mark one request as
+        leaving on the ledger. False -> the request is not sent and the check ends
+        UNAVAILABLE, not charged."""
+        ticket = self._active()
+        if ticket is None:
+            log.error("spend_cap_error code=NO_RESERVATION")
+            return False
+        if ticket.reservation.begin():
+            return True
+        log.error("spend_cap_error code=BEGIN")
+        return False
+
+    def not_sent_call(self):
+        """The request marked by begin_call provably never left (the transport was not
+        invoked): release its mark. Never used on a provider error (T3b cannot prove it)."""
+        ticket = self._active()
+        if ticket is not None:
+            ticket.reservation.not_sent()
+
     def guard(self, compare):
         """compare that refuses to run without an open reservation (no provider call)."""
         def guarded(reference, candidate):
@@ -179,17 +205,19 @@ class CheckGate:
         return guarded
 
     def settle(self, ticket, status):
-        """Charge the free-check counter on MATCH/MISMATCH only; always close the reservation."""
+        """Charge the free-check counter on MATCH/MISMATCH only; always close the reservation,
+        even when charge() raises a BaseException (WP-BOT-10 review, WP-BOT-12 3a)."""
         try:
-            if status in CHARGED:
-                self.counter.charge(ticket.user_id)
-        except Exception:
-            log.error("check_counter_error code=CHARGE")
-        try:
-            if status not in CHARGED:
-                self._count_uncharged(ticket.user_id)
-        except Exception:
-            log.error("check_gate_error code=UNCHARGED_COUNT")
+            try:
+                if status in CHARGED:
+                    self.counter.charge(ticket.user_id)
+            except Exception:
+                log.error("check_counter_error code=CHARGE")
+            try:
+                if status not in CHARGED:
+                    self._count_uncharged(ticket.user_id)
+            except Exception:
+                log.error("check_gate_error code=UNCHARGED_COUNT")
         finally:
             if self._active() is ticket:
                 self._local.ticket = None
@@ -215,7 +243,8 @@ def build_photo_checks(environ, api_get_file, api_fetch, *, data_dir=None, photo
     """PhotoChecks with the real session factory, the counter and one spend cap, or None."""
     gate = CheckGate(None, None)
     try:
-        compare = compare_factory(environ, on_call=gate.record_call)
+        compare = compare_factory(environ, on_call=gate.record_call, on_begin=gate.begin_call,
+                                  on_not_sent=gate.not_sent_call)
     except VisionConfigError as exc:
         log.warning("vision disabled, config invalid: %s", exc)
         return None
@@ -251,6 +280,19 @@ def build_photo_checks(environ, api_get_file, api_fetch, *, data_dir=None, photo
         return None
     except spend_cap.CapConfigError:
         log.error("spend_cap_error code=CONFIG")
+        return None
+    # Startup reconciliation (D-17): holds a previous process left on the ledger count in
+    # full for their day until an operator settles them (docs/t4-vision.md); never here.
+    for hold_id, day, usd in cap.orphans():
+        log.warning("spend_cap_orphan hold=%s day=%s usd=%.6f",
+                    hold_id if _HOLD_ID_RE.match(str(hold_id)) else "INVALID", day, usd)
+    if cap.state != "ready":
+        # The ledger is unusable (LOCK_WITHOUT_LEDGER, LEDGER_CORRUPT, ...): every reserve()
+        # would refuse, so keep the feature off and say so at startup ("vision enabled" is
+        # absent). Recovery: docs/t4-vision.md, Spend cap.
+        code = cap.fail_code
+        log.error("vision disabled, code=%s", code if _CODE_RE.match(str(code)) else "INTERNAL")
+        cap.close()
         return None
     gate.counter, gate.cap = counter, cap
     gate.cap_usd, gate.ledger_path = cap_usd, os.path.join(data_dir, CAP_FILE)
