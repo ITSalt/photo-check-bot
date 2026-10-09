@@ -6,6 +6,7 @@ import time
 
 from app.intake import pairing
 from app.photo_compare import run_bot_pair
+from app.verdict_notes import format_notes
 
 MESSAGES = {
     'ask_generated': 'Пришлите сгенерированное фото товара.',
@@ -63,6 +64,15 @@ class PhotoChecks:
                     replies.append(MESSAGES['UNAVAILABLE'])
                     continue
                 # Cleanup errors intentionally escape, so the bot publishes no verdict.
-                result = run_bot_pair(session, self.compare, self.logger)
-                replies.append(MESSAGES[result['status']])
+                # run_bot_pair keeps the exact T3a result; the notes ride on the side.
+                seen = []
+                def compare(reference, candidate):
+                    seen.append(self.compare(reference, candidate))
+                    return seen[-1]
+                result = run_bot_pair(session, compare, self.logger)
+                text = MESSAGES[result['status']]
+                if seen and isinstance(seen[0], dict) and seen[0].get('status') == result['status']:
+                    notes = format_notes(seen[0])
+                    text = text + ' ' + notes if notes else text
+                replies.append(text)
         return replies

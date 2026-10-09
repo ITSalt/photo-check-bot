@@ -95,7 +95,9 @@ def estimate_check_cost(prompt_usd_per_m, output_usd_per_m, assumed=ASSUMED):
 
 
 def make_compare(config, environ, call_provider, core, transport=None):
-    """compare(reference, candidate) -> {"status", ...}; never raises ProviderUnavailable.
+    """compare(reference, candidate) -> the vision_core.assess dict, or {"status": "UNAVAILABLE"}.
+
+    Never raises ProviderUnavailable.
 
     `core` is the app.vision_core module (injected so a missing core_t2 disables
     the feature instead of breaking import).
@@ -121,8 +123,8 @@ def make_compare(config, environ, call_provider, core, transport=None):
             answer_first = core.parse_compare(ask(stage, first), validated)
             stage = "compare_b"
             answer_second = core.parse_compare(ask(stage, second), validated)
-            stage = "decide"
-            return {"status": core.decide(answer_first, answer_second)}
+            stage = "assess"
+            return core.assess(validated, answer_first, answer_second)
         except ImageRejected as exc:
             log.warning("vision_rejected code=%s", exc.args[0])
         except ProviderUnavailable as exc:
