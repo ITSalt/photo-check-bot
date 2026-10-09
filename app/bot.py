@@ -3,6 +3,10 @@
 `python -m app.bot` turns the photo check on only when app/vision_wiring.py finds
 everything configured (VISION_*, CHECK_COUNTER_SALT, counter and spend cap);
 otherwise the bot replies exactly as before (welcome, waitlist, fallback).
+/forget works either way: it deletes the user's waitlist row and their free-check counter
+row (app/waitlist.py, app/check_counter.py; with the photo check off, through a standalone
+counter when CHECK_COUNTER_SALT is valid and the counter file exists). The waitlist is
+migrated and purged at startup and purged once a UTC day from the polling loop.
 """
 import json
 import logging
@@ -66,6 +70,55 @@ def reply_lang(msg):
         return "ru"
 
 
+def is_command(text, name):
+    first = (text or "").split(maxsplit=1)
+    return bool(first) and first[0].split("@", 1)[0].lower() == "/" + name
+
+
+def forget_counter_row(user, environ=None):
+    """With the photo check off: delete the user's free-check counter row all the same.
+
+    Needs a valid CHECK_COUNTER_SALT (without it the key cannot be computed) and an
+    existing DATA_DIR/check_counter.json; a corrupt file raises CounterConfigError.
+    """
+    from app import check_counter
+    environ = os.environ if environ is None else environ
+    salt = str(environ.get(check_counter.SALT_ENV) or "").strip()
+    if len(salt) < check_counter.MIN_SALT_CHARS:
+        return
+    path = os.path.join(environ.get("DATA_DIR") or "/data", check_counter.FILE_NAME)
+    if not os.path.exists(path):
+        return
+    check_counter.CheckCounter(path, salt.encode("utf-8")).forget(user)
+
+
+def forget(user, photo_checks=None):
+    """Delete everything the bot keeps about `user`. True when all of it is gone.
+
+    Each store is rewritten atomically; failures are logged by code only, never an id.
+    """
+    done = True
+    try:
+        waitlist.forget(user)
+    except waitlist.WaitlistError as exc:
+        log.error("forget_error code=WAITLIST_%s", exc.code)
+        done = False
+    except Exception:
+        log.error("forget_error code=WAITLIST")
+        done = False
+    try:
+        if photo_checks is not None:
+            photo_checks.forget(user)
+        else:
+            forget_counter_row(user)
+    except Exception:
+        log.error("forget_error code=COUNTER")
+        done = False
+    if done:
+        log.info("forget done")
+    return done
+
+
 def handle(update, *, photo_checks=None):
     msg = update.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
@@ -80,6 +133,11 @@ def handle(update, *, photo_checks=None):
         if event is None:
             return
     texts = TEXTS.get(reply_lang(msg), TEXTS["ru"])
+    if is_command(msg.get("text"), "forget"):
+        user = (msg.get("from") or {}).get("id")
+        done = user is not None and forget(user, photo_checks)
+        call("sendMessage", {"chat_id": chat, "text": texts["forget_done" if done else "forget_failed"]})
+        return
     if (msg.get("text") or "").startswith("/start"):
         user = (msg.get("from") or {}).get("id")
         if user is not None:
@@ -106,7 +164,9 @@ def main(*, photo_checks=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     offset = None
     log.info("bot started")
+    waitlist.startup()
     while True:
+        waitlist.maybe_purge()
         try:
             params = {"timeout": POLL_TIMEOUT}
             if offset is not None:

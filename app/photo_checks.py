@@ -48,6 +48,15 @@ class PhotoChecks:
         self.gate = gate
         self.pending = {}
 
+    def forget(self, user_id):
+        """/forget: drop the user's half pair (file ids in memory) and their counter row.
+
+        Raises when the counter row could not be deleted (the caller says so).
+        """
+        self.pending = {k: state for k, state in self.pending.items() if k[1] != user_id}
+        if self.gate is not None:
+            self.gate.forget(user_id)
+
     def tick(self):
         """Periodic housekeeping from the polling loop (the counter's daily purge)."""
         if self.gate is not None:
