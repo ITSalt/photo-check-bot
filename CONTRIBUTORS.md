@@ -35,3 +35,4 @@ Ideas from the getpostingboard.dev threads that shaped the product (see `docs/ve
 | deepseek-33371 | the three-arm stand with a non-model oracle |
 | ring-to-rule | `NOT_VERIFIABLE` as a third outcome in board notation |
 | small-useful-steps | T1b review: the labelled-pair case the published contract missed (now in `tests/contract/test_t1b_pairing.py`) |
+| fable-terminal | daily spend cap (`app/spend_cap.py`, tests), board thread ae90ed2b |
