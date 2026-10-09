@@ -95,7 +95,31 @@ def estimate_check_cost(prompt_usd_per_m, output_usd_per_m, assumed=ASSUMED):
     return {"prompt_tokens": prompt, "completion_tokens": out, "usd": usd}
 
 
-def make_compare(config, environ, call_provider, core, transport=None):
+def _cost(body):
+    usage = body.get("usage") if isinstance(body, dict) else None
+    cost = usage.get("cost") if isinstance(usage, dict) else None
+    return None if isinstance(cost, bool) or not isinstance(cost, (int, float)) else cost
+
+
+OVERRUN = "SPEND_CAP_OVERRUN"
+
+
+def _report(on_call, cost):
+    """Hand one call's cost (None: unknown) to the spend cap hook.
+
+    The hook returns False to stop the check (its spend went past its hold); a hook
+    that raises also stops it (fail closed). True when the chain may go on.
+    """
+    if on_call is None:
+        return True
+    try:
+        return on_call(cost) is not False
+    except Exception:
+        log.error("spend_cap_error code=HOOK")
+        return False
+
+
+def make_compare(config, environ, call_provider, core, transport=None, on_call=None):
     """compare(reference, candidate) -> the vision_core.assess dict, or {"status": "UNAVAILABLE"}.
 
     Never raises ProviderUnavailable: any provider failure (MISSING_KEY, TIMEOUT,
@@ -104,6 +128,11 @@ def make_compare(config, environ, call_provider, core, transport=None):
 
     `core` is the app.vision_core module (injected so a missing core_t2 disables
     the feature instead of breaking import).
+
+    `on_call(cost)` (optional, the spend cap) runs after every provider call that was
+    attempted: cost is the reply's usage.cost, or None when the call failed or the
+    reply has no usable cost (the cap then counts its fallback). If it returns False
+    the remaining calls are skipped and the check ends UNAVAILABLE (OVERRUN).
     """
     if transport is None:
         transport = make_transport(config["base_url"], config["timeout"],
@@ -111,8 +140,14 @@ def make_compare(config, environ, call_provider, core, transport=None):
     model = config["model"]
 
     def ask(stage, request):
-        body = call_provider(request, transport, environ, _provider_sink)
+        try:
+            body = call_provider(request, transport, environ, _provider_sink)
+        except BaseException:
+            _report(on_call, None)   # the call may still be billed: count the fallback
+            raise
         _log_usage(model, stage, body)
+        if not _report(on_call, _cost(body)):
+            raise ProviderUnavailable(OVERRUN)   # no further call in this check
         return body
 
     def compare(reference, candidate):
@@ -157,7 +192,7 @@ def _default_core():
     return vision_core
 
 
-def compare_from_env(environ, *, transport=None, core=None):
+def compare_from_env(environ, *, transport=None, core=None, on_call=None):
     """The compare callable, or None (not configured, or T3b / the T2 core unavailable).
 
     Every provider call goes through core_t3's call_provider; it is not injectable,
@@ -174,7 +209,7 @@ def compare_from_env(environ, *, transport=None, core=None):
     if core is None:
         log.warning("vision disabled, T2 core unavailable")
         return None
-    return make_compare(config, environ, call_provider, core, transport)
+    return make_compare(config, environ, call_provider, core, transport, on_call)
 
 
 def _main(argv, environ):

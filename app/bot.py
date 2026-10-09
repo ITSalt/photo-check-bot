@@ -1,7 +1,8 @@
-"""Minimal Telegram bot skeleton: long polling, standard library only.
+"""Telegram bot: long polling, standard library only.
 
-Placeholder so the deploy pipeline can be tested end to end. The real
-intake (paired photos) and checking logic come in through pull requests.
+`python -m app.bot` turns the photo check on only when app/vision_wiring.py finds
+everything configured (VISION_*, CHECK_COUNTER_SALT, counter and spend cap);
+otherwise the bot replies exactly as before (welcome, waitlist, fallback).
 """
 import json
 import logging
@@ -17,7 +18,10 @@ from app.intake.parse import parse_update
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API = f"https://api.telegram.org/bot{TOKEN}"
+FILE_API = f"https://api.telegram.org/file/bot{TOKEN}"
 POLL_TIMEOUT = 30
+FILE_TIMEOUT = 30
+CHUNK = 64 * 1024
 
 # Bot replies and profile texts, RU and EN (rules: tests/test_bot_texts.py).
 TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(encoding="utf-8"))
@@ -32,6 +36,24 @@ def call(method, params=None, timeout=POLL_TIMEOUT + 10):
     if not body.get("ok"):
         raise RuntimeError(f"{method}: {body.get('description')}")
     return body["result"]
+
+
+def get_file(file_id):
+    """Bot API getFile result ({"file_size", "file_path", ...}) for the session factory."""
+    return call("getFile", {"file_id": file_id}, timeout=FILE_TIMEOUT)
+
+
+def fetch_file(file_path):
+    """Stream a file from the Bot API file endpoint in chunks. The URL holds the token: never logged."""
+    if not isinstance(file_path, str) or not file_path or file_path.startswith("/") or ".." in file_path:
+        raise ValueError("BAD_FILE_PATH")
+    url = FILE_API + "/" + urllib.parse.quote(file_path, safe="/")
+    with urllib.request.urlopen(url, timeout=FILE_TIMEOUT) as resp:
+        while True:
+            chunk = resp.read(CHUNK)
+            if not chunk:
+                return
+            yield chunk
 
 
 def reply_lang(msg):
@@ -69,7 +91,7 @@ def handle(update, *, photo_checks=None):
             return
     if photo_checks is not None:
         try:
-            messages = photo_checks.handle(event)
+            messages = photo_checks.handle(event, lang=reply_lang(msg))
         except Exception:
             # Includes cleanup failure: no verdict and no raw exception/photo data.
             log.warning("photo processing stopped")
@@ -92,11 +114,20 @@ def main(*, photo_checks=None):
             for update in call("getUpdates", params):
                 offset = update["update_id"] + 1
                 handle(update, photo_checks=photo_checks)
+            if photo_checks is not None:
+                photo_checks.tick()
         except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
             # Never log the URL: it contains the token.
             log.warning("polling error: %s", type(exc).__name__)
             time.sleep(5)
 
 
+def build(environ=os.environ):
+    """PhotoChecks when the vision check is fully configured, else None (bot as before)."""
+    from app.vision_wiring import build_photo_checks
+    return build_photo_checks(environ, get_file, fetch_file)
+
+
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    main(photo_checks=build())

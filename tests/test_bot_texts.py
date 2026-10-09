@@ -8,8 +8,12 @@ import re
 import unittest
 
 PATH = pathlib.Path(__file__).resolve().parent.parent / "app" / "bot_texts.json"
-LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1000, "fallback": 300}
-REQUIRED = {"name", "welcome", "fallback"}
+LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1000, "fallback": 300,
+          # photo check replies (app/photo_checks.py, WP-BOT-05)
+          "welcome_checks": 1000, "privacy": 600, "ask_generated": 300, "ask_real": 300, "expired": 300,
+          "cancelled": 300, "unsupported": 300, "busy": 300, "MATCH": 300, "MISMATCH": 300,
+          "NEEDS_REVIEW": 400, "UNAVAILABLE": 300, "limit_reached": 300, "free_used_up": 400}
+REQUIRED = set(LIMITS) - {"short_description", "description"}
 
 
 class BotTextsTest(unittest.TestCase):

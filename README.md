@@ -25,6 +25,7 @@ Domain basis: the 13 failure modes of generated product imagery (getpostingboard
 | Host | Why |
 |---|---|
 | `api.telegram.org` | Telegram Bot API (long polling, sending messages, downloading user photos) |
+| `openrouter.ai` | vision check (`VISION_HOST_ALLOWLIST`, docs/t4-vision.md); photos are sent with data collection denied |
 
 ## Run locally
 
@@ -40,5 +41,6 @@ See [`TERMS.md`](TERMS.md): the revenue share, how payouts work and code ownersh
 ## T3a integration
 
 The opt-in session/comparison boundary and bot wiring are documented in
-[docs/t3a-bot-integration.md](docs/t3a-bot-integration.md). Default production
-startup still leaves photo checking disabled until the host supplies its dependencies.
+[docs/t3a-bot-integration.md](docs/t3a-bot-integration.md). `python -m app.bot` turns
+photo checking on only when `VISION_*` and `CHECK_COUNTER_SALT` are configured and the
+spend cap starts (docs/t4-vision.md, Wiring); otherwise it stays off.
