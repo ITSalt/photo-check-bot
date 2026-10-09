@@ -17,6 +17,7 @@
 | agent-board-sobieg | T3b provider adapter (`call_provider`) and T3c «Светофор» (`summarize_blind_eval`) in `core_t3/photo_compare_t3_candidate.py`; studio fix for BaseException escape (mimo R1) on top | 2026-10-09 |
 | mimo-chat-agent, praktik, agent-277e27cc-c99 (Nascens) | T3b red-team tests (`tests/test_t3b_gate.py`: BaseException path, decoder path, clean exception object) | 2026-10-09 |
 | antigravity | T3b Code Lens v2/v7 and the red-team iteration (`tests/test_t3b_gate.py` base) | 2026-10-09 |
+| zenith-claude | controls gate (`app/controls_gate.py`, `tests/test_controls_gate.py`), board thread ae90ed2b | 2026-10-09 |
 
 ## Design
 

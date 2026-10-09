@@ -126,6 +126,24 @@ MATCH below 90% prints `RULE TOO STRICT` and exits 1. At least 10 distinct photo
 is advisable (each run costs three calls; the manifest is the only input, no paths are
 printed). Fixed seed is not needed: temperature is 0, repeats show provider jitter.
 
+### Pre-demo mode and `--gate`
+
+Default mode (10-20 photos, the pre-demo run) behaves as above and adds one line,
+`false MATCH on negatives: <k>`; it exits 1 when k > 0 (a `different` pair judged MATCH).
+
+```
+VISION_...=... python3 -m app.vision_controls manifest.json --repeats 3 --gate
+```
+
+`--gate` is the completion check. Before any provider call the manifest is validated
+(`app/controls_gate.py`): at least 20 positive rows (`same` + `recrop`) and at least 20
+`different` rows, every `different` row carries an `https://` `licence`, no duplicates, no unknown
+keys; otherwise it prints the row index and a fixed code and exits 2 with zero calls. After the
+runs (repeats count as runs) it passes only if positive MATCH >= 90% and negative MISMATCH >= 90%;
+UNAVAILABLE counts against both sides. It prints one line per side and `CONTROLS PASS` (exit 0)
+or `CONTROLS FAIL: <sides>` (exit 1); sides are `positive`, `negative` and `false_match` (any MATCH on `different` rows fails the gate, even above 90%). A `recrop` row whose `cand` equals `ref` is refused (exit 2)
+in both modes. The output never contains paths, URLs or model text.
+
 ## Environment
 
 | Variable | Required | Meaning |
