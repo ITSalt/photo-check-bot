@@ -45,3 +45,5 @@ jobs:
           if ls tests/test_*.py >/dev/null 2>&1; then python -m unittest discover -s tests -v; else echo "no tests yet"; fi
       - name: Build image
         run: docker build -t photo-check-bot:ci .
+      - name: Image ships the vision cores
+        run: docker run --rm --entrypoint python photo-check-bot:ci -c "import app.vision_compare, core_t2, core_t3"
