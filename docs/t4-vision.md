@@ -254,9 +254,11 @@ list serves the public 50% offer to the first 100 users (issue #17).
   (no content); /start still answers but records nothing, totals are zero, /forget answers that it
   could not finish. Fix or remove the file by hand to recover.
 
-`/forget` (ru/en reply, works with the photo check on or off) deletes the user's waitlist row
-and, when the photo check is on, their free-check counter row (`CheckCounter.forget`, HMAC key)
-and any half pair held in memory. Each file is rewritten atomically; a repeated /forget is fine.
+`/forget` (ru/en reply, works with the photo check on or off) deletes the user's waitlist row,
+their free-check counter row (`CheckCounter.forget`, HMAC key) and any half pair held in memory.
+With the photo check off for any reason, the counter row is deleted through a standalone
+`CheckCounter` when `CHECK_COUNTER_SALT` is valid and `DATA_DIR/check_counter.json` exists; a
+corrupt counter file makes /forget answer that it could not finish. Each file is rewritten atomically; a repeated /forget is fine.
 Logs: `forget done`, or `forget_error code=WAITLIST_CORRUPT|WAITLIST_WRITE|COUNTER`, never an id.
 Without `CHECK_COUNTER_SALT` the counter key cannot be computed, so only the waitlist row goes.
 

@@ -91,6 +91,15 @@ class RecordTest(Base):
             waitlist.record(1, "/start a")
         self.assertEqual(calls[:2], ["fsync", ("replace", self.dir.name)])
 
+    def test_writes_keep_other_top_level_keys(self):
+        self.write({"users": {"1": "a"}, "note": {"keep": [1, 2]}, "version": 3}, mtime=DAY0)
+        waitlist.migrate()
+        waitlist.record(2, "/start b")
+        waitlist.forget(1)
+        data = json.loads(self.raw())
+        self.assertEqual({k: v for k, v in data.items() if k != "users"}, {"note": {"keep": [1, 2]}, "version": 3})
+        self.assertEqual(data["users"], {"2": {"source": "b", "joined_at": "2026-10-09"}})
+
     def test_failed_write_keeps_old_file_and_logs_code(self):
         waitlist.record(1, "/start a")
         before = self.raw()

@@ -3,8 +3,9 @@
 `python -m app.bot` turns the photo check on only when app/vision_wiring.py finds
 everything configured (VISION_*, CHECK_COUNTER_SALT, counter and spend cap);
 otherwise the bot replies exactly as before (welcome, waitlist, fallback).
-/forget works either way: it deletes the user's waitlist row and, with the photo check
-on, their free-check counter row (app/waitlist.py, app/check_counter.py). The waitlist is
+/forget works either way: it deletes the user's waitlist row and their free-check counter
+row (app/waitlist.py, app/check_counter.py; with the photo check off, through a standalone
+counter when CHECK_COUNTER_SALT is valid and the counter file exists). The waitlist is
 migrated and purged at startup and purged once a UTC day from the polling loop.
 """
 import json
@@ -74,6 +75,23 @@ def is_command(text, name):
     return bool(first) and first[0].split("@", 1)[0].lower() == "/" + name
 
 
+def forget_counter_row(user, environ=None):
+    """With the photo check off: delete the user's free-check counter row all the same.
+
+    Needs a valid CHECK_COUNTER_SALT (without it the key cannot be computed) and an
+    existing DATA_DIR/check_counter.json; a corrupt file raises CounterConfigError.
+    """
+    from app import check_counter
+    environ = os.environ if environ is None else environ
+    salt = str(environ.get(check_counter.SALT_ENV) or "").strip()
+    if len(salt) < check_counter.MIN_SALT_CHARS:
+        return
+    path = os.path.join(environ.get("DATA_DIR") or "/data", check_counter.FILE_NAME)
+    if not os.path.exists(path):
+        return
+    check_counter.CheckCounter(path, salt.encode("utf-8")).forget(user)
+
+
 def forget(user, photo_checks=None):
     """Delete everything the bot keeps about `user`. True when all of it is gone.
 
@@ -88,12 +106,14 @@ def forget(user, photo_checks=None):
     except Exception:
         log.error("forget_error code=WAITLIST")
         done = False
-    if photo_checks is not None:
-        try:
+    try:
+        if photo_checks is not None:
             photo_checks.forget(user)
-        except Exception:
-            log.error("forget_error code=COUNTER")
-            done = False
+        else:
+            forget_counter_row(user)
+    except Exception:
+        log.error("forget_error code=COUNTER")
+        done = False
     if done:
         log.info("forget done")
     return done
