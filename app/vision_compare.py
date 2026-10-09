@@ -101,14 +101,22 @@ def _cost(body):
     return None if isinstance(cost, bool) or not isinstance(cost, (int, float)) else cost
 
 
+OVERRUN = "SPEND_CAP_OVERRUN"
+
+
 def _report(on_call, cost):
-    """Hand one call's cost (None: unknown) to the spend cap hook; the hook never breaks a check."""
+    """Hand one call's cost (None: unknown) to the spend cap hook.
+
+    The hook returns False to stop the check (its spend went past its hold); a hook
+    that raises also stops it (fail closed). True when the chain may go on.
+    """
     if on_call is None:
-        return
+        return True
     try:
-        on_call(cost)
+        return on_call(cost) is not False
     except Exception:
         log.error("spend_cap_error code=HOOK")
+        return False
 
 
 def make_compare(config, environ, call_provider, core, transport=None, on_call=None):
@@ -123,7 +131,8 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
 
     `on_call(cost)` (optional, the spend cap) runs after every provider call that was
     attempted: cost is the reply's usage.cost, or None when the call failed or the
-    reply has no usable cost (the cap then counts its fallback).
+    reply has no usable cost (the cap then counts its fallback). If it returns False
+    the remaining calls are skipped and the check ends UNAVAILABLE (OVERRUN).
     """
     if transport is None:
         transport = make_transport(config["base_url"], config["timeout"],
@@ -137,7 +146,8 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
             _report(on_call, None)   # the call may still be billed: count the fallback
             raise
         _log_usage(model, stage, body)
-        _report(on_call, _cost(body))
+        if not _report(on_call, _cost(body)):
+            raise ProviderUnavailable(OVERRUN)   # no further call in this check
         return body
 
     def compare(reference, candidate):

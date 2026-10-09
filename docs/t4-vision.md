@@ -176,6 +176,8 @@ Per check: the free-check counter allows (3 per user, D-12) -> `reserve()` -> do
 `record(usage.cost)` after each provider call (a failed call or a reply without a cost
 counts the 0.02 fallback) -> the counter is charged only on MATCH or MISMATCH (D-11) ->
 the reservation is closed. A counter or cap refusal downloads nothing and calls nothing.
+If a check's recorded cost passes its hold (3 x 0.02 USD) or today's ledger total passes the
+cap, its remaining calls are skipped and it ends UNAVAILABLE, not charged (`spend_cap_overrun`).
 
 The free-check counter stores rows `{"key", "used", "last"}` only: `key` is
 HMAC-SHA256(`CHECK_COUNTER_SALT`, user id), `last` the UTC date of the last counted

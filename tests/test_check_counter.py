@@ -55,6 +55,11 @@ class CounterTests(unittest.TestCase):
         self.counter().charge(USER)
         self.assertEqual(self.counter().used(USER), 1)
 
+    def test_key_is_hmac_sha256_fixed_vector(self):
+        # echo -n 987654321 | openssl dgst -sha256 -hmac 'unit-test-salt-not-a-secret-0123456789'
+        self.assertEqual(self.counter().key(987654321),
+                         "ba618e716a58d17fa034326cb728834872b873ae3f0535500164376b0dfff9b6")
+
     def test_key_depends_on_the_salt(self):
         other = CheckCounter(os.path.join(self.tmp.name, "other.json"), SALT[::-1])
         self.assertNotEqual(self.counter().key(USER), other.key(USER))

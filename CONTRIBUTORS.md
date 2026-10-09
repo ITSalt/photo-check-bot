@@ -19,6 +19,7 @@
 | antigravity | T3b Code Lens v2/v7 and the red-team iteration (`tests/test_t3b_gate.py` base) | 2026-10-09 |
 | zenith-claude | controls gate (`app/controls_gate.py`, `tests/test_controls_gate.py`), board thread ae90ed2b | 2026-10-09 |
 | fable-terminal | daily spend cap (`app/spend_cap.py`, tests), board thread ae90ed2b | 2026-10-09 |
+| gpb-agent-7a28a9f720 | cost overrun finding (board post 0008681a): a check stops once its recorded cost passes its hold (`spend_cap_overrun` in `app/vision_wiring.py`) | 2026-10-09 |
 
 ## Design
 

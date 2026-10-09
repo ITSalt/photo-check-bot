@@ -4,6 +4,7 @@ Every scenario drives app.bot.handle with Telegram updates; getFile / file downl
 sendMessage and the provider are fakes. Photos land in a temporary photo root that
 must be empty after every check.
 """
+import datetime
 import importlib
 import json
 import logging
@@ -67,9 +68,9 @@ class FakeTelegram:
 
 class FakeCompare:
     """compare_factory for build_photo_checks: three 'calls' per check, each reported to on_call."""
-    def __init__(self, test, result, costs=(0.001, 0.002, 0.003)):
-        self.test, self.result, self.costs = test, result, costs
-        self.calls, self.on_call = [], None
+    def __init__(self, test, result, costs=(0.001, 0.002, 0.003), obey=True):
+        self.test, self.result, self.costs, self.obey = test, result, costs, obey
+        self.calls, self.on_call, self.provider_calls = [], None, 0
 
     def __call__(self, environ, *, on_call=None):
         self.on_call = on_call
@@ -81,7 +82,9 @@ class FakeCompare:
         self.test.assertEqual(len(os.listdir(self.test.photo_dir)), 1)
         self.calls.append(1)
         for cost in self.costs:
-            self.on_call(cost)
+            self.provider_calls += 1
+            if self.on_call(cost) is False and self.obey:
+                return {"status": "UNAVAILABLE"}
         if isinstance(self.result, BaseException):
             raise self.result
         return self.result
@@ -308,6 +311,64 @@ class SpendCapTests(WiringBase):
         ledger = json.loads(pathlib.Path(os.path.join(self.data_dir, "spend_cap.json")).read_text(encoding="utf-8"))
         self.assertAlmostEqual(ledger["spent_usd"], 0.05)
 
+    def test_overrun_stops_the_check_unavailable_uncharged(self):
+        # Board post 0008681a: three 0.05 calls under a 0.10 cap would record 0.15.
+        fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.05, 0.05, 0.05))
+        checks = self.build(fake, env=dict(self.env, VISION_DAILY_CAP_USD="0.10"))
+        with self.assertLogs("vision_wiring", "WARNING") as logs:
+            reply = self.pair(checks)[1]
+        self.assertEqual(reply, TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(fake.provider_calls, 2)
+        self.assertIn("spend_cap_overrun", "\n".join(logs.output))
+        self.assertEqual(self.used(checks), 0)
+        self.assertEqual(os.listdir(self.photo_dir), [])
+        self.assertEqual(checks.gate.cap._held, 0)
+
+    def test_overrun_on_last_call_is_still_unavailable(self):
+        fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.01, 0.01, 0.05), obey=False)
+        checks = self.build(fake)
+        self.assertEqual(self.pair(checks)[1], TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(self.used(checks), 0)
+
+    def test_day_total_past_cap_stops_the_check(self):
+        # Today's ledger grows past the cap during the check (e.g. a write by another
+        # source): the check's own total is still under its hold, the day total is not.
+        fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.001, 0.001, 0.001))
+        ledger = os.path.join(self.data_dir, "spend_cap.json")
+        inner = fake.compare
+        def compare(reference, candidate):
+            today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+            pathlib.Path(ledger).write_text(json.dumps({"day": today, "spent_usd": 0.0995}))
+            return inner(reference, candidate)
+        fake.compare = compare
+        checks = self.build(fake, env=dict(self.env, VISION_DAILY_CAP_USD="0.10"))
+        with self.assertLogs("vision_wiring", "WARNING") as logs:
+            reply = self.pair(checks)[1]
+        self.assertEqual(reply, TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(fake.provider_calls, 1)
+        self.assertIn("spend_cap_overrun", "\n".join(logs.output))
+        self.assertEqual(self.used(checks), 0)
+        self.assertEqual(os.listdir(self.photo_dir), [])
+
+    def test_unreadable_ledger_after_record_stops_the_check(self):
+        fake = FakeCompare(self, {"status": "MATCH"})
+        checks = self.build(fake)
+        with patch.object(vision_wiring, "_ledger_micro", return_value=None):
+            self.assertEqual(self.pair(checks)[1], TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual((fake.provider_calls, self.used(checks)), (1, 0))
+
+    def test_compare_ignoring_the_stop_gets_no_verdict(self):
+        fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.05, 0.05, 0.05), obey=False)
+        checks = self.build(fake)
+        self.assertEqual(self.pair(checks)[1], TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(self.used(checks), 0)
+
+    def test_exactly_at_hold_is_not_an_overrun(self):
+        fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.02, 0.02, 0.02))
+        checks = self.build(fake)
+        self.assertTrue(self.pair(checks)[1].startswith(TEXTS["ru"]["MATCH"]))
+        self.assertEqual((fake.provider_calls, self.used(checks)), (3, 1))
+
     def test_cap_created_once_at_startup(self):
         with patch.object(vision_wiring.spend_cap, "SpendCap", wraps=spend_cap.SpendCap) as cls:
             checks = self.build(FakeCompare(self, {"status": "MISMATCH"}))
@@ -365,6 +426,32 @@ class RealChainCostTests(WiringBase):
         self.assertEqual(self.used(checks), 1)
         self.assertEqual(os.listdir(self.photo_dir), [])
 
+    def test_real_chain_overrun_makes_two_calls_at_most(self):
+        model = FakeModel(usage={"cost": 0.05})
+        checks = self.build(self.chain(model), env=dict(self.env, VISION_DAILY_CAP_USD="0.10"))
+        with self.assertLogs(level=logging.INFO) as logs:
+            reply = self.pair(checks)[1]
+        text = "\n".join(logs.output)
+        self.assertEqual(reply, TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(len(model.requests), 2)
+        self.assertIn("spend_cap_overrun", text)
+        self.assertIn("code=SPEND_CAP_OVERRUN", text)
+        self.assertAlmostEqual(self.spent(), 0.10)
+        self.assertEqual(self.used(checks), 0)
+        self.assertEqual(os.listdir(self.photo_dir), [])
+        self.assertEqual(self.pair(checks, user=USER + 1)[1], TEXTS["ru"]["limit_reached"])
+        self.assertEqual(len(model.requests), 2)
+
+    def test_hook_error_stops_the_chain(self):
+        model = FakeModel(usage={"cost": 0.004})
+        def broken_factory(environ, on_call=None):
+            def hook(cost):
+                raise RuntimeError("hook")
+            return vision_compare.compare_from_env(environ, transport=model, on_call=hook)
+        checks = self.build(broken_factory)
+        self.assertEqual(self.pair(checks)[1], TEXTS["ru"]["UNAVAILABLE"])
+        self.assertEqual(len(model.requests), 1)
+
     def test_missing_usage_counts_fallback_per_call(self):
         checks = self.build(self.chain(FakeModel()))
         self.pair(checks)
@@ -418,13 +505,33 @@ class PrivacyAndOffTests(WiringBase):
                                  [t["welcome_checks"], t["privacy"]])
 
     def test_privacy_line_texts(self):
-        self.assertIn("бот хранит только число ваших проверок под обезличенным ключом, 90 дней",
-                      TEXTS["ru"]["privacy"].lower())
-        self.assertIn("only the number of your checks under an anonymised key, for 90 days", TEXTS["en"]["privacy"])
+        self.assertTrue(TEXTS["ru"]["privacy"].endswith(
+            "Бот хранит число ваших проверок под обезличенным ключом 90 дней. Ещё бот помнит ваш Telegram ID "
+            "и откуда вы пришли — для списка ожидания платных проверок."))
+        self.assertTrue(TEXTS["en"]["privacy"].endswith(
+            "The bot keeps the number of your checks under an anonymised key for 90 days. It also keeps your "
+            "Telegram ID and where you came from, for the paid-checks waitlist."))
+        for lang in ("ru", "en"):
+            self.assertNotIn("только", TEXTS[lang]["privacy"])
+            self.assertNotIn("only", TEXTS[lang]["privacy"])
         for lang in ("ru", "en"):
             self.assertIn("(UTC)", TEXTS[lang]["limit_reached"])
         self.assertTrue(TEXTS["ru"]["limit_reached"].startswith("Дневной лимит проверок исчерпан, попробуйте завтра (UTC)"))
         self.assertTrue(TEXTS["en"]["limit_reached"].startswith("Daily check limit reached, try again tomorrow (UTC)"))
+
+    def test_real_photo_first_gets_privacy_pointer_before_next_photo(self):
+        for lang in ("ru", "en"):
+            with self.subTest(lang=lang):
+                self.fresh()
+                fake = FakeCompare(self, {"status": "MATCH"})
+                checks = self.build(fake)
+                sent = self.run_updates(checks, update(lang=lang, photo="real-file-id-1", caption="real"))
+                self.assertEqual(sent, [TEXTS[lang]["ask_generated"]])
+                self.assertIn("/privacy", sent[0])
+                self.assertIn("OpenRouter", sent[0])
+                self.assertEqual(fake.calls, [])
+                sent = self.run_updates(checks, update(lang=lang, photo="gen-file-id-1"))
+                self.assertTrue(sent[0].startswith(TEXTS[lang]["MATCH"]))
 
     def test_help_keeps_half_pair(self):
         fake = FakeCompare(self, {"status": "MATCH"})
