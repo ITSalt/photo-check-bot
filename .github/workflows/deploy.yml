@@ -38,10 +38,18 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # T4 vision (docs/t4-vision.md). An empty key leaves the feature off.
+          VISION_API_KEY: ${{ secrets.VISION_API_KEY }}
+          VISION_BASE_URL: https://openrouter.ai/api/v1/chat/completions
+          VISION_MODEL: google/gemini-3.6-flash
+          VISION_HOST_ALLOWLIST: openrouter.ai
+          VISION_DAILY_CAP_USD: "2"
         run: |
           SSH="ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes ${VPS_USER}@${VPS_HOST}"
           git archive --format=tar HEAD | $SSH 'rm -rf ~/app.new && mkdir -p ~/app.new && tar -x -C ~/app.new'
-          printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN" | $SSH 'umask 077 && cat > ~/app.new/.env'
+          printf 'TELEGRAM_BOT_TOKEN=%s\nVISION_API_KEY=%s\nVISION_BASE_URL=%s\nVISION_MODEL=%s\nVISION_HOST_ALLOWLIST=%s\nVISION_DAILY_CAP_USD=%s\n' \
+            "$TELEGRAM_BOT_TOKEN" "$VISION_API_KEY" "$VISION_BASE_URL" "$VISION_MODEL" "$VISION_HOST_ALLOWLIST" "$VISION_DAILY_CAP_USD" \
+            | $SSH 'umask 077 && cat > ~/app.new/.env'
           $SSH 'set -e; rm -rf ~/app.prev; if [ -d ~/app ]; then mv ~/app ~/app.prev; fi; mv ~/app.new ~/app; cd ~/app && docker compose up -d --build --remove-orphans && docker compose ps'
 
       - name: Clean up

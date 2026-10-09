@@ -46,4 +46,5 @@ jobs:
       - name: Build image
         run: docker build -t photo-check-bot:ci .
       - name: Image ships the vision cores
-        run: docker run --rm --entrypoint python photo-check-bot:ci -c "import app.vision_compare, core_t2, core_t3"
+        run: |
+          docker run --rm --entrypoint python photo-check-bot:ci -c "import app.vision_compare as v; assert v._default_core() is not None and v._default_call_provider() is not None"
