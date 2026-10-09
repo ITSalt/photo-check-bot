@@ -345,7 +345,7 @@ class SpendCapTests(WiringBase):
     def test_day_total_past_cap_stops_the_check(self):
         # Today's ledger goes past the cap while the first request is out (a write by
         # another source): the check's own total is still under its hold, the day total
-        # is not. Spend cap v2 sees the file changed behind its back (LEDGER_CORRUPT),
+        # is not. Spend cap v2 sees the file changed behind its back (LEDGER_CHANGED),
         # keeps the record in memory and leaves the file, so the overrun reader sees it.
         fake = FakeCompare(self, {"status": "MATCH"}, costs=(0.001, 0.001, 0.001))
         ledger = os.path.join(self.data_dir, "spend_cap.json")
@@ -363,7 +363,7 @@ class SpendCapTests(WiringBase):
         self.assertEqual(reply, TEXTS["ru"]["UNAVAILABLE"])
         self.assertEqual(fake.provider_calls, 1)
         self.assertIn("spend_cap_overrun", "\n".join(logs.output))
-        self.assertIn("spend_cap_error code=LEDGER_CORRUPT", "\n".join(cap_logs.output))
+        self.assertIn("spend_cap_error code=LEDGER_CHANGED", "\n".join(cap_logs.output))
         self.assertEqual(self.used(checks), 0)
         self.assertEqual(os.listdir(self.photo_dir), [])
 

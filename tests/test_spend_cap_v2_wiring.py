@@ -138,10 +138,23 @@ class CrashTests(V2Base):
         pathlib.Path(self.cap_path() + ".lock").touch()
         with self.assertLogs("vision_wiring", "ERROR") as logs:
             self.assertIsNone(self.build(self.chain(FakeModel())))
-        self.assertIn("vision disabled, code=SPEND_CAP_LEDGER", "\n".join(logs.output))
+        self.assertIn("ERROR:vision_wiring:vision disabled, code=LOCK_WITHOUT_LEDGER", logs.output)
+        self.assertNotIn("vision enabled", "\n".join(logs.output))
         self.assertFalse(os.path.exists(self.cap_path()))
         os.remove(self.cap_path() + ".lock")           # the documented reset: remove both files
         self.assertIsNotNone(self.build(self.chain(FakeModel())))
+
+    def test_corrupt_ledger_keeps_vision_off(self):
+        for raw in ("not json", json.dumps({"day": today(), "spent_usd": -1}),
+                    json.dumps({"day": today(), "spent_usd": 0, "holds": {"x": {"day": today()}}})):
+            with self.subTest(raw=raw):
+                self.fresh()
+                os.makedirs(self.data_dir)
+                pathlib.Path(self.cap_path()).write_text(raw)
+                with self.assertLogs("vision_wiring", "ERROR") as logs:
+                    self.assertIsNone(self.build(self.chain(FakeModel())))
+                self.assertIn("ERROR:vision_wiring:vision disabled, code=LEDGER_CORRUPT", logs.output)
+                self.assertEqual(pathlib.Path(self.cap_path()).read_text(), raw)   # left for a human
 
 
 class V1LedgerTests(V2Base):

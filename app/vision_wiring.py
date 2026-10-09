@@ -49,6 +49,7 @@ UNCHARGED_LIMIT_ENV = "UNCHARGED_DAILY_LIMIT"
 DEFAULT_UNCHARGED_LIMIT = 10
 CAP_FILE = "spend_cap.json"
 _HOLD_ID_RE = re.compile(r"^[0-9a-f]{32}$")     # spend_cap v2 hold ids are uuid4().hex
+_CODE_RE = re.compile(r"^[A-Z_]{1,32}$")         # spend_cap fail_code values are fixed codes
 PHOTO_DIR = "photo-checks"
 
 
@@ -285,12 +286,12 @@ def build_photo_checks(environ, api_get_file, api_fetch, *, data_dir=None, photo
     for hold_id, day, usd in cap.orphans():
         log.warning("spend_cap_orphan hold=%s day=%s usd=%.6f",
                     hold_id if _HOLD_ID_RE.match(str(hold_id)) else "INVALID", day, usd)
-    if not getattr(cap, "_loaded", False):
-        # orphans() could not read the ledger (corrupt, or the lock file outlived a deleted
-        # ledger): every reserve() would refuse, so keep the feature off and say so at
-        # startup ("vision enabled" is absent). Recovery: docs/t4-vision.md, Spend cap.
-        # _loaded is private: spend_cap.py stays verbatim and has no public accessor for it.
-        log.error("vision disabled, code=SPEND_CAP_LEDGER")
+    if cap.state != "ready":
+        # The ledger is unusable (LOCK_WITHOUT_LEDGER, LEDGER_CORRUPT, ...): every reserve()
+        # would refuse, so keep the feature off and say so at startup ("vision enabled" is
+        # absent). Recovery: docs/t4-vision.md, Spend cap.
+        code = cap.fail_code
+        log.error("vision disabled, code=%s", code if _CODE_RE.match(str(code)) else "INTERNAL")
         cap.close()
         return None
     gate.counter, gate.cap = counter, cap

@@ -235,15 +235,16 @@ the spend cap sums those. The smoke test's lines replace the assumptions above. 
 
 ## Spend cap
 
-`app/spend_cap.py` (v2, fable-terminal, D-17) keeps a per-UTC-day ledger in `DATA_DIR`,
+`app/spend_cap.py` (v2.1.1, fable-terminal, D-17) keeps a per-UTC-day ledger in `DATA_DIR`,
 written atomically (file and directory fsync): `{"day", "spent_usd", "holds"}`, where
-`holds` maps a random hold id to `{"day", "usd", "in_flight"}`; no user identifiers. The cap
+`holds` maps a random hold id to `{"day", "usd", "in_flight", "at"}` (`at`: when the hold was
+taken, Unix seconds); no user identifiers. The cap
 is `VISION_DAILY_CAP_USD` (default 2.00; an invalid value fails closed). A check reserves its
 worst case (3 x 0.02 USD) before the first provider call; a call with no usable cost counts as
 a fallback of 0.02 USD. One process per ledger: a second one fails to take the lock
 (`SECOND_WRITER`). Wired into the bot by WP-BOT-05 and WP-BOT-12 (see Wiring above).
 
-v2 semantics:
+v2 semantics (v2.1.1):
 
 - `reserve()` writes the hold to the ledger before it returns; `begin()` writes "one request
   in flight" before each send. A request never leaves before its liability is on disk.
@@ -251,10 +252,17 @@ v2 semantics:
   request provably never left, `close()` frees the rest only when nothing is in flight.
 - A hold found on the ledger at startup belongs to a process that died (or closed with a
   request out). It is an orphan: logged as `spend_cap_orphan hold=<id> day=<day> usd=<usd>`,
-  counted in full for its day, never released automatically. It stops counting the next UTC day.
-- A v1 ledger (`{"day", "spent_usd"}`) is read as having no holds, with its total kept.
+  counted in full for its day, never released automatically. It stops counting only when its
+  day is over AND it is older than `orphan_lifetime_s` (default 600 s, at least 2 x the 30 s
+  client timeout; the bot uses the default), so a request still billing across midnight keeps
+  its hold.
+- A v1 ledger (`{"day", "spent_usd"}`) is read as having no holds, with its total kept; a v2
+  hold without `at` is read as taken at the end of its day.
 - Fails closed (no provider call): an unreadable or changed ledger, a clock that went back past
-  the ledger's day, a failed write.
+  the ledger's day, a failed write. `cap.state` is `ready` or `failed`, `cap.fail_code` says
+  why (`LEDGER_CORRUPT`, `LOCK_WITHOUT_LEDGER`, `LEDGER_CHANGED`, `LEDGER_UNREADABLE`,
+  `CLOCK_BACKWARDS`, `CLOSED`). If it is not `ready` at startup the bot logs
+  `vision disabled, code=<fail_code>` and runs without checks.
 
 Orphan recovery (operator). Look up the real cost of the requests made around the orphan's
 time in the OpenRouter activity log, then settle it with the bot stopped (the bot holds the
@@ -270,8 +278,9 @@ blocks only its own day's budget.
 
 Lock without ledger = vision off. If `DATA_DIR` has `spend_cap.json.lock` but no
 `spend_cap.json` (the ledger was deleted, or a v1 volume where no cost was ever recorded), the
-cap cannot tell what was spent: the bot logs `vision disabled, code=SPEND_CAP_LEDGER` and
-runs without checks. To reset, stop the bot and remove both files
+cap cannot tell what was spent: the bot logs `vision disabled, code=LOCK_WITHOUT_LEDGER` and
+runs without checks. A corrupt ledger logs `vision disabled, code=LEDGER_CORRUPT` and is left
+untouched for a human to look at. To reset, stop the bot and remove both files
 (`spend_cap.json` and `spend_cap.json.lock`); this forgets today's spend.
 
 Post-deploy check: the log has `vision enabled`; note any `spend_cap_orphan` lines;
@@ -373,3 +382,5 @@ lines and imports the chain there.
 `tests/test_call_ceiling.py` covers the per-call ceiling (WP-BOT-12 criterion 4) and
 `tests/test_spend_cap_v2_wiring.py` the spend cap v2 wiring (begin, not_sent, a process
 killed between begin and record, v1 ledger, orphan settle, settle closing the reservation).
+Spend cap mutants (fable-terminal; not run by CI, each must print `killed`):
+`python3 tests/mutation/spend_cap_mutants.py`.

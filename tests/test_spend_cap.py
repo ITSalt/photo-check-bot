@@ -239,7 +239,8 @@ class DurableHolds(Base):
     def test_14_hold_is_on_disk_before_reserve_returns(self):
         c = self.cap(0.10)
         r = c.reserve()
-        self.assertEqual(self.ledger()["holds"], {r.hold_id: {"day": "2026-10-09", "usd": 0.06, "in_flight": 0}})
+        self.assertEqual(self.ledger()["holds"], {r.hold_id: {"day": "2026-10-09", "usd": 0.06, "in_flight": 0,
+                                                              "at": DAY1 + 3600}})
         self.assertTrue(r.begin())
         self.assertEqual(self.ledger()["holds"][r.hold_id]["in_flight"], 1)
 
@@ -327,6 +328,102 @@ class DurableHolds(Base):
         self.assertEqual(self.ledger()["spent_usd"], 0.0)
         self.assertEqual(c.settle("nope", 0.01), "unknown")   # booked anyway: money spent is money spent
         self.assertAlmostEqual(self.ledger()["spent_usd"], 0.01, places=9)
+
+    # -- v2.1: an orphan stops counting when it can no longer bill, not at midnight
+    def test_23_orphan_across_midnight_waits_for_its_lifetime(self):
+        self.clock.t = DAY1 + 86400 - 60                # A: 23:59, holds 0.06, request out, dies
+        hid = self.die_holding("sent")
+        self.clock.t = DAY1 + 86400 + 60                # B: 00:01 under a 0.10 cap
+        b = self.cap(0.10)
+        self.assertIsNone(b.reserve())                  # A's orphan may still bill: 0.06 + 0.06 > 0.10
+        self.assertEqual(b.orphans(), [(hid, "2026-10-09", 0.06)])
+        self.clock.t = DAY1 + 86400 - 60 + 600          # exactly the lifetime: not yet older than it
+        self.assertIsNone(b.reserve())
+        self.clock.t += 1                               # 00:09:01, older than 600 s
+        with self.assertLogs("spend_cap", "WARNING") as cm:
+            self.assertIsNotNone(b.reserve())
+        self.assertIn(f"spend_cap_orphan_expired hold={hid} usd=0.060000", cm.output[0])
+        self.assertEqual(b.settle(hid, 0.03), "unknown")   # A's late charge still books to today
+
+    def test_24_lifetime_none_means_only_settle_frees(self):
+        hid = self.die_holding("sent")
+        self.clock.t += 7 * 86400
+        b = self.cap(0.10, orphan_lifetime_s=None)
+        self.assertIsNone(b.reserve())
+        self.assertEqual(b.settle(hid, 0.01), "settled")
+        self.assertIsNotNone(b.reserve())
+        for bad in (-1, float("nan"), "600", True):
+            with self.assertRaises(CapConfigError):
+                SpendCap(os.path.join(self.tmp.name, "x.json"), 1.0, orphan_lifetime_s=bad)
+
+    def test_25_v2_hold_without_at_counts_until_its_day_ends_plus_lifetime(self):
+        holds = {"old": {"day": "2026-10-09", "usd": 0.06, "in_flight": 1}}
+        with open(self.path, "w") as f: json.dump({"day": "2026-10-09", "spent_usd": 0.0, "holds": holds}, f)
+        self.clock.t = DAY1 + 86400 + 300               # day 2, 00:05: a v2 hold is taken as 23:59:59.999...
+        b = self.cap(0.10)
+        self.assertIsNone(b.reserve())
+        self.clock.t = DAY1 + 86400 + 601
+        self.assertIsNotNone(b.reserve())
+
+    def test_26_at_must_agree_with_day(self):
+        for at in (DAY1 - 1, "x", -5, float("inf")):
+            holds = {"a": {"day": "2026-10-09", "usd": 0.06, "in_flight": 0, "at": at}}
+            with open(self.path, "w") as f: f.write(json.dumps({"day": "2026-10-09", "spent_usd": 0.0, "holds": holds}))
+            c = SpendCap(self.path, 2.00, clock=self.clock)
+            self.assertEqual((c.state, c.fail_code), ("failed", "LEDGER_CORRUPT"))
+            c.close()
+
+    def test_27_state_and_fail_code(self):
+        c = self.cap()
+        self.assertEqual((c.state, c.fail_code), ("ready", None))
+        c.reserve()
+        self.assertEqual(c.state, "ready")
+        with open(self.path, "w") as f: f.write("{}")
+        self.assertEqual(c.fail_code, "LEDGER_CHANGED")
+        c.close()
+        self.assertEqual((c.state, c.fail_code), ("failed", "CLOSED"))
+        os.unlink(self.path)
+        b = self.cap()                                  # lock file without its ledger
+        self.assertEqual((b.state, b.fail_code), ("failed", "LOCK_WITHOUT_LEDGER"))
+        with self.assertLogs("spend_cap", "ERROR") as cm:
+            self.assertIsNone(b.reserve())
+        self.assertIn("code=LOCK_WITHOUT_LEDGER", cm.output[0])
+        b.close(); os.unlink(self.path + ".lock")
+        with open(self.path, "w") as f: f.write("{broken")
+        d = self.cap()
+        self.assertEqual(d.fail_code, "LEDGER_CORRUPT")
+        self.clock.t = DAY1 + 2 * 86400; os.unlink(self.path)
+        d.close(); os.unlink(self.path + ".lock")
+        e = self.cap(); e.reserve()
+        self.clock.t = DAY1                             # clock stepped back past the ledger's day
+        self.assertEqual(e.fail_code, "CLOCK_BACKWARDS")
+
+    def test_28_hold_taken_as_midnight_ticks_is_readable_by_the_next_owner(self):
+        ticks = iter(DAY1 + 86400 - 1 + 0.5 * i for i in range(100))   # every clock read moves time on
+        c = SpendCap(self.path, 0.10, clock=lambda: next(ticks))
+        self.assertIsNotNone(c.reserve()); c.close()
+        b = self.cap(0.10)
+        self.assertEqual(b.fail_code, None)             # "at" and "day" were taken from one reading
+
+    def test_29_v2_hold_survives_a_write_and_a_restart(self):   # zenith 80987, written by looktwin 80995
+        holds = {"old": {"day": "2026-10-09", "usd": 0.06, "in_flight": 1}}
+        with open(self.path, "w") as f: json.dump({"day": "2026-10-09", "spent_usd": 0.0, "holds": holds}, f)
+        self.clock.t = DAY1 + 86400 + 300
+        b = SpendCap(self.path, 2.00, clock=self.clock)
+        r = b.reserve(); self.assertIsNotNone(r); r.close(); b.close()
+        self.assertNotIn("at", self.ledger()["holds"]["old"])   # written back as the v2 owner wrote it
+        c = SpendCap(self.path, 2.00, clock=self.clock)
+        self.assertEqual((c.state, c.fail_code), ("ready", None))
+        self.assertIn("old", [o[0] for o in c.orphans()])
+        c.close()
+
+    def test_30_todays_orphan_counts_all_day_whatever_its_age(self):
+        a = SpendCap(self.path, 0.10, clock=self.clock)
+        r = a.reserve(); self.assertTrue(r.begin()); a.close()   # dies with a request in flight
+        self.clock.t = DAY1 + 23 * 3600                  # the same day, 22 h later: far past the lifetime
+        b = self.cap(0.10)
+        self.assertEqual(len(b.orphans()), 1)
+        self.assertIsNone(b.reserve())                   # its money is not back in today's budget
 
 
 if __name__ == "__main__":
