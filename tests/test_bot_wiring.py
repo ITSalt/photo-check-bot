@@ -507,10 +507,10 @@ class PrivacyAndOffTests(WiringBase):
     def test_privacy_line_texts(self):
         self.assertTrue(TEXTS["ru"]["privacy"].endswith(
             "Бот хранит число ваших проверок под обезличенным ключом 90 дней. Ещё бот помнит ваш Telegram ID "
-            "и откуда вы пришли — для списка ожидания платных проверок."))
+            "и откуда вы пришли — для списка ожидания платных проверок. /forget удаляет всё о вас."))
         self.assertTrue(TEXTS["en"]["privacy"].endswith(
             "The bot keeps the number of your checks under an anonymised key for 90 days. It also keeps your "
-            "Telegram ID and where you came from, for the paid-checks waitlist."))
+            "Telegram ID and where you came from, for the paid-checks waitlist. /forget deletes everything about you."))
         for lang in ("ru", "en"):
             self.assertNotIn("только", TEXTS[lang]["privacy"])
             self.assertNotIn("only", TEXTS[lang]["privacy"])

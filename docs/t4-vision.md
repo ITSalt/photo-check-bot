@@ -232,6 +232,34 @@ ends. Every request carries `provider.data_collection = "deny"`, so only provide
 do not store or train on the request are used; their retention is otherwise governed by
 their terms.
 
+## Waitlist and /forget (WP-BOT-09, D-14)
+
+`app/waitlist.py` keeps `DATA_DIR/waitlist.json`: `{"users": {"<telegram id>": {"source",
+"joined_at"}}}`, `joined_at` = UTC date of the first /start. The raw id is kept on purpose: the
+list serves the public 50% offer to the first 100 users (issue #17).
+
+- Retention: a row is deleted 180 days after `joined_at`, or 30 days after paid checks launch
+  (`PAID_LAUNCH_DATE`, ISO date such as `2027-01-15`; unset or invalid = not launched, an invalid
+  value logs `waitlist_error code=BAD_PAID_LAUNCH_DATE`), whichever comes first. The purge runs at
+  startup and once per UTC day from the polling loop (a failed purge is retried after an hour).
+- Writes: always atomic and 0600 (temp file in the same directory, fsync, `os.replace`).
+- Migration at startup, idempotent: old rows `"<id>": "<source>"` become `{"source",
+  "joined_at"}`; a missing `joined_at` is the UTC date of the file's mtime (today if the mtime is
+  unavailable). The mtime is the file's latest write, never earlier than any join, so this never
+  shortens anyone's retention. Ids and sources stay exactly as they were, the file mode becomes
+  0600, and no backup copy is made (it would survive /forget). Both row formats are read.
+  Temp files left by an interrupted write (`waitlist.json.tmp`, `.waitlist.*.tmp`) are removed
+  at startup for the same reason.
+- Corrupt or unreadable file: never overwritten. Each access logs `waitlist_error code=CORRUPT`
+  (no content); /start still answers but records nothing, totals are zero, /forget answers that it
+  could not finish. Fix or remove the file by hand to recover.
+
+`/forget` (ru/en reply, works with the photo check on or off) deletes the user's waitlist row
+and, when the photo check is on, their free-check counter row (`CheckCounter.forget`, HMAC key)
+and any half pair held in memory. Each file is rewritten atomically; a repeated /forget is fine.
+Logs: `forget done`, or `forget_error code=WAITLIST_CORRUPT|WAITLIST_WRITE|COUNTER`, never an id.
+Without `CHECK_COUNTER_SALT` the counter key cannot be computed, so only the waitlist row goes.
+
 ## Live smoke test (one pair, orchestrator)
 
 ```

@@ -12,7 +12,9 @@ LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1
           # photo check replies (app/photo_checks.py, WP-BOT-05)
           "welcome_checks": 1000, "privacy": 600, "ask_generated": 300, "ask_real": 300, "expired": 300,
           "cancelled": 300, "unsupported": 300, "busy": 300, "MATCH": 300, "MISMATCH": 300,
-          "NEEDS_REVIEW": 400, "UNAVAILABLE": 300, "limit_reached": 300, "free_used_up": 400}
+          "NEEDS_REVIEW": 400, "UNAVAILABLE": 300, "limit_reached": 300, "free_used_up": 400,
+          # /forget replies (app/bot.py, WP-BOT-09)
+          "forget_done": 300, "forget_failed": 300}
 REQUIRED = set(LIMITS) - {"short_description", "description"}
 
 

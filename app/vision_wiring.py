@@ -146,6 +146,10 @@ class CheckGate:
         log.info("check_done status=%s charged=%s", status if status else "NONE",
                  "yes" if status in CHARGED else "no")
 
+    def forget(self, user_id):
+        """/forget: delete the user's counter row (raises when that failed)."""
+        self.counter.forget(user_id)
+
     def tick(self):
         try:
             self.counter.maybe_purge()

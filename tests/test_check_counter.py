@@ -6,6 +6,7 @@ import pathlib
 import stat
 import tempfile
 import unittest
+import unittest.mock
 
 from app import check_counter
 from app.check_counter import CheckCounter, CounterConfigError, salt_from_env
@@ -108,6 +109,34 @@ class CounterTests(unittest.TestCase):
                     f.write(content)
                 with self.assertRaises(CounterConfigError):
                     self.counter()
+
+    def test_forget_deletes_the_row_at_once_and_is_idempotent(self):
+        c = self.counter()
+        c.charge(USER)
+        c.charge(USER + 1)
+        key = c.key(USER)
+        c.forget(USER)
+        rows = json.loads(pathlib.Path(self.path).read_bytes())
+        self.assertEqual([r["key"] for r in rows], [c.key(USER + 1)])
+        self.assertNotIn(key.encode(), pathlib.Path(self.path).read_bytes())
+        self.assertEqual(c.used(USER), 0)
+        self.assertEqual(self.counter().used(USER), 0)
+        c.forget(USER)
+        c.forget(USER + 2)
+        self.assertEqual(self.counter().used(USER + 1), 1)
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
+
+    def test_failed_forget_write_raises_and_keeps_the_row(self):
+        c = self.counter()
+        c.charge(USER)
+        before = pathlib.Path(self.path).read_bytes()
+        with unittest.mock.patch.object(check_counter.os, "replace", side_effect=OSError("disk")):
+            with self.assertRaises(OSError):
+                c.forget(USER)
+        self.assertEqual(c.used(USER), 1)
+        self.assertEqual(pathlib.Path(self.path).read_bytes(), before)
+        c.forget(USER)
+        self.assertEqual(self.counter().used(USER), 0)
 
     def test_bad_user_ids_rejected(self):
         c = self.counter()

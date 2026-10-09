@@ -3,6 +3,9 @@
 `python -m app.bot` turns the photo check on only when app/vision_wiring.py finds
 everything configured (VISION_*, CHECK_COUNTER_SALT, counter and spend cap);
 otherwise the bot replies exactly as before (welcome, waitlist, fallback).
+/forget works either way: it deletes the user's waitlist row and, with the photo check
+on, their free-check counter row (app/waitlist.py, app/check_counter.py). The waitlist is
+migrated and purged at startup and purged once a UTC day from the polling loop.
 """
 import json
 import logging
@@ -66,6 +69,36 @@ def reply_lang(msg):
         return "ru"
 
 
+def is_command(text, name):
+    first = (text or "").split(maxsplit=1)
+    return bool(first) and first[0].split("@", 1)[0].lower() == "/" + name
+
+
+def forget(user, photo_checks=None):
+    """Delete everything the bot keeps about `user`. True when all of it is gone.
+
+    Each store is rewritten atomically; failures are logged by code only, never an id.
+    """
+    done = True
+    try:
+        waitlist.forget(user)
+    except waitlist.WaitlistError as exc:
+        log.error("forget_error code=WAITLIST_%s", exc.code)
+        done = False
+    except Exception:
+        log.error("forget_error code=WAITLIST")
+        done = False
+    if photo_checks is not None:
+        try:
+            photo_checks.forget(user)
+        except Exception:
+            log.error("forget_error code=COUNTER")
+            done = False
+    if done:
+        log.info("forget done")
+    return done
+
+
 def handle(update, *, photo_checks=None):
     msg = update.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
@@ -80,6 +113,11 @@ def handle(update, *, photo_checks=None):
         if event is None:
             return
     texts = TEXTS.get(reply_lang(msg), TEXTS["ru"])
+    if is_command(msg.get("text"), "forget"):
+        user = (msg.get("from") or {}).get("id")
+        done = user is not None and forget(user, photo_checks)
+        call("sendMessage", {"chat_id": chat, "text": texts["forget_done" if done else "forget_failed"]})
+        return
     if (msg.get("text") or "").startswith("/start"):
         user = (msg.get("from") or {}).get("id")
         if user is not None:
@@ -106,7 +144,9 @@ def main(*, photo_checks=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     offset = None
     log.info("bot started")
+    waitlist.startup()
     while True:
+        waitlist.maybe_purge()
         try:
             params = {"timeout": POLL_TIMEOUT}
             if offset is not None:

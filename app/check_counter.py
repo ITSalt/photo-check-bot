@@ -6,7 +6,7 @@ key  = HMAC-SHA256(CHECK_COUNTER_SALT, decimal user id), hex; the raw id, names,
 used = checks counted so far (only MATCH or MISMATCH count, D-11, decided by the caller);
 last = UTC date (YYYY-MM-DD) of the last counted check.
 Rows whose last counted check is more than RETENTION_DAYS old are purged at startup
-and once per UTC day.
+and once per UTC day; forget(user_id) deletes a user's row at once (/forget).
 
 Fails closed: a missing or short salt, or an unreadable file at startup, raises
 CounterConfigError and the caller keeps the vision check off. The rows live in memory
@@ -152,3 +152,20 @@ class CheckCounter:
             row = self._rows.get(key) or {"used": 0, "last": None}
             self._rows[key] = {"used": row["used"] + 1, "last": self._today().isoformat()}
             self._save()
+
+    def forget(self, user_id):
+        """Delete the user's row at once (/forget). Idempotent.
+
+        The file is rewritten atomically before this returns; on a failed write the row
+        stays (in memory and on disk) and OSError is raised, so the caller can say so.
+        """
+        with self._lock:
+            key = self.key(user_id)
+            row = self._rows.pop(key, None)
+            if row is None:
+                return
+            try:
+                self._write()
+            except OSError:
+                self._rows[key] = row
+                raise
