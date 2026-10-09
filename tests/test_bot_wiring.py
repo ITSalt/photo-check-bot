@@ -225,7 +225,8 @@ class FreeCounterTests(WiringBase):
 
     def test_needs_review_and_unavailable_never_use_up_free_checks(self):
         fake = FakeCompare(self, DETAIL)
-        checks = self.build(fake)
+        # 10 uncharged checks below, then one MATCH: the WP-BOT-10 daily limit (default 10) is raised to 11
+        checks = self.build(fake, env=dict(self.env, UNCHARGED_DAILY_LIMIT="11"))
         for _ in range(5):
             self.pair(checks)
         fake.result = {"status": "UNAVAILABLE"}

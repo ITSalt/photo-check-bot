@@ -8,7 +8,7 @@ readable free-check counter, and the spend cap: ONE SpendCap per process, create
 here at startup; CapConfigError / SingleWriterError turn the feature off.
 
 CheckGate does the per-check order (D-12, D-11, D-7, WP-BOT-03):
-counter allows -> cap.reserve() before the first provider call -> compare, with
+counter allows -> uncharged daily limit (WP-BOT-10, D-15) -> cap.reserve() before the first provider call -> compare, with
 record(usage.cost) after each provider call -> the counter is charged only on MATCH
 or MISMATCH -> reservation.close() in a finally.
 
@@ -20,6 +20,8 @@ import math
 import os
 import tempfile
 import threading
+import time
+import datetime as _dt
 
 from app import check_counter, session_factory, spend_cap
 from app.photo_checks import PhotoChecks
@@ -40,6 +42,8 @@ def _micro(cost):
     if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
         return round(PER_CALL_FALLBACK_USD * _MICRO)
     return round(cost * _MICRO)
+UNCHARGED_LIMIT_ENV = "UNCHARGED_DAILY_LIMIT"
+DEFAULT_UNCHARGED_LIMIT = 10
 CAP_FILE = "spend_cap.json"
 PHOTO_DIR = "photo-checks"
 
@@ -66,11 +70,49 @@ def _ledger_micro(path):
     return round(spent * _MICRO)
 
 
+def uncharged_limit_from_env(environ):
+    """UNCHARGED_DAILY_LIMIT: a positive integer; unset or empty -> 10; invalid -> 10, logged by code."""
+    raw = str(environ.get(UNCHARGED_LIMIT_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_UNCHARGED_LIMIT
+    if raw.isascii() and raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    log.warning("uncharged_limit_config code=INVALID")
+    return DEFAULT_UNCHARGED_LIMIT
+
+
 class CheckGate:
-    def __init__(self, counter, cap, *, cap_usd=None, ledger_path=None):
+    """Per-check gate. The uncharged-check counts (WP-BOT-10) live in memory only, keyed by
+    the counter's HMAC key (never the raw id), for the current UTC day; nothing is written
+    to disk and a restart resets them."""
+
+    def __init__(self, counter, cap, *, cap_usd=None, ledger_path=None,
+                 uncharged_limit=DEFAULT_UNCHARGED_LIMIT, clock=time.time):
         self.counter, self.cap = counter, cap
         self.cap_usd, self.ledger_path = cap_usd, ledger_path
+        self.uncharged_limit, self._clock = uncharged_limit, clock
+        self._uncharged = {}          # HMAC key -> uncharged checks today
+        self._uncharged_day = None
+        self._ulock = threading.Lock()
         self._local = threading.local()
+
+    def _roll_day(self):
+        """Under _ulock: drop all counts when the UTC day changed."""
+        today = _dt.datetime.fromtimestamp(self._clock(), _dt.timezone.utc).date()
+        if self._uncharged_day != today:
+            self._uncharged, self._uncharged_day = {}, today
+
+    def _uncharged_today(self, user_id):
+        key = self.counter.key(user_id)
+        with self._ulock:
+            self._roll_day()
+            return self._uncharged.get(key, 0)
+
+    def _count_uncharged(self, user_id):
+        key = self.counter.key(user_id)
+        with self._ulock:
+            self._roll_day()
+            self._uncharged[key] = self._uncharged.get(key, 0) + 1
 
     def _over_cap(self):
         """Today's recorded total past the cap (or unknown)."""
@@ -89,6 +131,10 @@ class CheckGate:
             if not self.counter.allows(user_id):
                 log.info("check_refused code=FREE_USED_UP")
                 return None, 'free_used_up'
+            if self._uncharged_today(user_id) >= self.uncharged_limit:
+                # The outcome is unknown before the call, so ANY check is refused today.
+                log.info("check_refused code=UNCHARGED_LIMIT")
+                return None, 'uncharged_limit'
             reservation = self.cap.reserve()
             if reservation is None:
                 log.info("check_refused code=DAILY_CAP")
@@ -139,6 +185,11 @@ class CheckGate:
                 self.counter.charge(ticket.user_id)
         except Exception:
             log.error("check_counter_error code=CHARGE")
+        try:
+            if status not in CHARGED:
+                self._count_uncharged(ticket.user_id)
+        except Exception:
+            log.error("check_gate_error code=UNCHARGED_COUNT")
         finally:
             if self._active() is ticket:
                 self._local.ticket = None
@@ -147,7 +198,9 @@ class CheckGate:
                  "yes" if status in CHARGED else "no")
 
     def forget(self, user_id):
-        """/forget: delete the user's counter row (raises when that failed)."""
+        """/forget: delete the user's counter row (raises when that failed) and in-memory count."""
+        with self._ulock:
+            self._uncharged.pop(self.counter.key(user_id), None)
         self.counter.forget(user_id)
 
     def tick(self):
@@ -201,6 +254,9 @@ def build_photo_checks(environ, api_get_file, api_fetch, *, data_dir=None, photo
         return None
     gate.counter, gate.cap = counter, cap
     gate.cap_usd, gate.ledger_path = cap_usd, os.path.join(data_dir, CAP_FILE)
+    gate.uncharged_limit = uncharged_limit_from_env(environ)
+    if clock is not None:
+        gate._clock = clock
     factory = session_factory.make_session_factory(api_get_file, api_fetch, root, MAX_IMAGE_BYTES)
     log.info("vision enabled")
     return PhotoChecks(factory, gate.guard(compare), gate=gate)

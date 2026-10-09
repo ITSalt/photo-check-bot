@@ -18,7 +18,7 @@ from app.verdict_notes import format_notes
 
 TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(encoding="utf-8"))
 KEYS = ('ask_generated', 'ask_real', 'expired', 'cancelled', 'unsupported', 'busy',
-        'MATCH', 'MISMATCH', 'NEEDS_REVIEW', 'UNAVAILABLE', 'limit_reached', 'free_used_up',
+        'MATCH', 'MISMATCH', 'NEEDS_REVIEW', 'UNAVAILABLE', 'limit_reached', 'free_used_up', 'uncharged_limit',
         'welcome_checks', 'privacy')
 MESSAGES = {key: TEXTS['ru'][key] for key in KEYS}
 PRIVACY_COMMANDS = ('help', 'privacy')
