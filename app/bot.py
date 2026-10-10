@@ -175,7 +175,7 @@ def main(*, photo_checks=None):
                 offset = update["update_id"] + 1
                 handle(update, photo_checks=photo_checks)
             if photo_checks is not None:
-                photo_checks.tick()
+                photo_checks.tick(send=lambda chat, text: call("sendMessage", {"chat_id": chat, "text": text}))
         except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
             # Never log the URL: it contains the token.
             log.warning("polling error: %s", type(exc).__name__)
