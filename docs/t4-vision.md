@@ -155,6 +155,7 @@ in both modes. The output never contains paths, URLs or model text.
 | `VISION_API_KEY` | yes | read only by `call_provider` (T3b); never logged |
 | `CHECK_COUNTER_SALT` | yes, for the bot | key of the free-check counter (D-12), at least 32 characters; unset or short keeps the vision check off |
 | `VISION_TIMEOUT` | no | seconds, `0 < t <= 120`, default 30; the transport caps each call at it, and T3b asks for 30 s per call, so values above 30 have no effect |
+| `PAIR_REMINDER_MIN` | no | second photo reminder after 5 min (`PAIR_REMINDER_MIN`, 1..25); default 5 |
 
 If a required variable is unset or empty, `compare_from_env` returns `None` and logs
 only the names of the unset variables. If values are set but invalid it raises
