@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import pathlib
+import secrets
 import time
 
 from app.intake import pairing
@@ -25,7 +26,9 @@ TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(
 KEYS = ('ask_generated', 'ask_real', 'expired', 'cancelled', 'unsupported', 'busy',
         'MATCH', 'MISMATCH', 'NEEDS_REVIEW', 'UNAVAILABLE', 'limit_reached', 'free_used_up', 'uncharged_limit',
         'welcome_checks', 'privacy', 'image_too_large', 'image_unreadable',
-        'ask_generated_after_real', 'reminder_real', 'reminder_generated')
+        'ask_generated_after_real', 'reminder_real', 'reminder_generated',
+        'feedback_button', 'feedback_ask', 'feedback_thanks', 'feedback_refused',
+        'code_color', 'code_size', 'code_logo', 'code_model', 'code_other')
 # Reasons a compare result may carry with UNAVAILABLE (app/vision_compare.py IMAGE_REASONS).
 IMAGE_REASONS = ('image_too_large', 'image_unreadable')
 MESSAGES = {key: TEXTS['ru'][key] for key in KEYS}
@@ -33,6 +36,37 @@ PRIVACY_COMMANDS = ('help', 'privacy')
 REMINDER_ENV = 'PAIR_REMINDER_MIN'
 REMINDER_DEFAULT_MIN = 5
 REMINDER_MAX_MIN = 25
+# WP-UX-02: "the verdict is wrong" feedback. callback_data is "fb:<token>" (open the codes)
+# or "fb:<token>:<code>"; the token is random and opaque, no id of any kind (<= 64 bytes).
+FEEDBACK_STATUSES = ('MATCH', 'MISMATCH', 'NEEDS_REVIEW')
+FEEDBACK_CODES = ('color', 'size', 'logo', 'model', 'other')
+FEEDBACK_PREFIX = 'fb'
+FEEDBACK_TTL_S = 24 * 3600
+
+
+class Reply(str):
+    """A reply text that may carry an inline keyboard (`markup`, a Bot API reply_markup dict)."""
+    markup = None
+
+    def __new__(cls, text, markup=None):
+        obj = super().__new__(cls, text)
+        obj.markup = markup
+        return obj
+
+
+def feedback_data(token, code=None):
+    return f'{FEEDBACK_PREFIX}:{token}' + (f':{code}' if code else '')
+
+
+def parse_feedback_data(data):
+    """(token, code or None) from callback_data, or None when it is not ours / malformed."""
+    parts = str(data or '').split(':')
+    if len(parts) not in (2, 3) or parts[0] != FEEDBACK_PREFIX or not parts[1]:
+        return None
+    code = parts[2] if len(parts) == 3 else None
+    if code is not None and code not in FEEDBACK_CODES:
+        return None
+    return parts[1], code
 
 
 def reminder_from_env(environ):
@@ -69,6 +103,8 @@ class PhotoChecks:
         self.clock, self.max_pending = clock, max_pending
         self.gate = gate
         self.pending = {}
+        # In memory only (lost on restart): per user the last verdict that can be marked wrong.
+        self.verdicts = {}
         # In memory only: per half pair the age it was reminded at and the reply language.
         self.reminders = {}
         self.reminder_s = reminder_from_env(os.environ) if reminder_s is None else reminder_s
@@ -80,6 +116,7 @@ class PhotoChecks:
         """
         self.pending = {k: state for k, state in self.pending.items() if k[1] != user_id}
         self.reminders = {k: v for k, v in self.reminders.items() if k[1] != user_id}
+        self.verdicts.pop(user_id, None)
         if self.gate is not None:
             self.gate.forget(user_id)
 
@@ -146,6 +183,38 @@ class PhotoChecks:
                 replies.append(self._check(user, action, text, lang))
         return replies
 
+    def _remember_verdict(self, user, status):
+        """Keep the user's last verdict (status only) for one feedback; returns its random token."""
+        now = self.clock()
+        self.verdicts = {u: v for u, v in self.verdicts.items() if now - v['time'] <= FEEDBACK_TTL_S}
+        self.verdicts.pop(user, None)
+        while len(self.verdicts) >= self.max_pending:
+            self.verdicts.pop(min(self.verdicts, key=lambda u: self.verdicts[u]['time']))
+        token = secrets.token_hex(4)
+        self.verdicts[user] = {'token': token, 'status': status, 'time': now, 'reported': False}
+        return token
+
+    def handle_feedback(self, event, lang='ru'):
+        """A press on the wrong-verdict button or on a difference code. Returns reply texts.
+
+        Accepted once, for the user's last verdict only, within 24 h. One log line per
+        accepted code: status and code, no id, no token, no free text.
+        """
+        text = messages(lang)
+        user, token, code = event.get('user_id'), event.get('token'), event.get('code')
+        entry = self.verdicts.get(user) if type(user) is int else None
+        if (entry is None or not isinstance(token, str) or not secrets.compare_digest(token, entry['token'])
+                or entry['reported'] or self.clock() - entry['time'] > FEEDBACK_TTL_S
+                or (code is not None and code not in FEEDBACK_CODES)):
+            return [text['feedback_refused']]
+        if code is None:
+            buttons = [{'text': text['code_' + c], 'callback_data': feedback_data(token, c)}
+                       for c in FEEDBACK_CODES]
+            return [Reply(text['feedback_ask'], {'inline_keyboard': [buttons[:3], buttons[3:]]})]
+        entry['reported'] = True
+        log.info('verdict_feedback a=%s diff=%s', entry['status'], code)
+        return [text['feedback_thanks']]
+
     def _check(self, user, action, text, lang):
         ticket = None
         if self.gate is not None:
@@ -185,4 +254,8 @@ class PhotoChecks:
         if seen and isinstance(seen[0], dict) and seen[0].get('status') == status:
             notes = format_notes(seen[0], lang)
             reply = reply + ' ' + notes if notes else reply
+        if status in FEEDBACK_STATUSES:
+            token = self._remember_verdict(user, status)
+            return Reply(reply, {'inline_keyboard': [[
+                {'text': text['feedback_button'], 'callback_data': feedback_data(token)}]]})
         return reply

@@ -19,6 +19,7 @@ import urllib.request
 
 from app import lang, waitlist
 from app.intake.parse import parse_update
+from app.photo_checks import parse_feedback_data
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API = f"https://api.telegram.org/bot{TOKEN}"
@@ -26,6 +27,7 @@ FILE_API = f"https://api.telegram.org/file/bot{TOKEN}"
 POLL_TIMEOUT = 30
 FILE_TIMEOUT = 30
 CHUNK = 64 * 1024
+ALLOWED_UPDATES = ["message", "callback_query"]
 
 # Bot replies and profile texts, RU and EN (rules: tests/test_bot_texts.py).
 TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(encoding="utf-8"))
@@ -119,7 +121,55 @@ def forget(user, photo_checks=None):
     return done
 
 
+def parse_feedback(update):
+    """Event {kind: "feedback", user_id, chat_id, token, code, callback_id} from a callback_query
+    of a private chat, else None. Only ids Telegram sends; none goes back into callback_data."""
+    query = update.get("callback_query")
+    if not isinstance(query, dict):
+        return None
+    message = query.get("message") or {}
+    chat = message.get("chat") or {}
+    parsed = parse_feedback_data(query.get("data"))
+    if chat.get("type") != "private" or parsed is None:
+        return None
+    return {"kind": "feedback", "user_id": (query.get("from") or {}).get("id"), "chat_id": chat.get("id"),
+            "token": parsed[0], "code": parsed[1], "callback_id": query.get("id")}
+
+
+def send_reply(chat, text):
+    params = {"chat_id": chat, "text": text}
+    markup = getattr(text, "markup", None)
+    if markup:
+        params["reply_markup"] = json.dumps(markup)
+    call("sendMessage", params)
+
+
+def handle_callback(update, photo_checks):
+    """Every callback_query is answered (no text); a feedback press gets its reply."""
+    query = update["callback_query"]
+    if query.get("id") is not None:
+        try:
+            call("answerCallbackQuery", {"callback_query_id": query["id"]})
+        except Exception as exc:
+            log.warning("answerCallbackQuery error: %s", type(exc).__name__)
+    if photo_checks is None:
+        return
+    event = parse_feedback(update)
+    if event is None or type(event["chat_id"]) is not int:
+        return
+    try:
+        replies = photo_checks.handle_feedback(event, lang=reply_lang({"from": query.get("from")}))
+    except Exception:
+        log.warning("feedback processing stopped")
+        return
+    for text in replies:
+        send_reply(event["chat_id"], text)
+
+
 def handle(update, *, photo_checks=None):
+    if isinstance(update.get("callback_query"), dict):
+        handle_callback(update, photo_checks)
+        return
     msg = update.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
     if chat is None:
@@ -155,7 +205,7 @@ def handle(update, *, photo_checks=None):
             log.warning("photo processing stopped")
             return
         for text in messages:
-            call("sendMessage", {"chat_id": chat, "text": text})
+            send_reply(chat, text)
     else:
         call("sendMessage", {"chat_id": chat, "text": texts["fallback"]})
 
@@ -168,7 +218,7 @@ def main(*, photo_checks=None):
     while True:
         waitlist.maybe_purge()
         try:
-            params = {"timeout": POLL_TIMEOUT}
+            params = {"timeout": POLL_TIMEOUT, "allowed_updates": json.dumps(ALLOWED_UPDATES)}
             if offset is not None:
                 params["offset"] = offset
             for update in call("getUpdates", params):
