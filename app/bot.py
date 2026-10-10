@@ -7,6 +7,10 @@ otherwise the bot replies exactly as before (welcome, waitlist, fallback).
 row (app/waitlist.py, app/check_counter.py; with the photo check off, through a standalone
 counter when CHECK_COUNTER_SALT is valid and the counter file exists). The waitlist is
 migrated and purged at startup and purged once a UTC day from the polling loop.
+
+Reply language (app/lang.py): a /start payload token, else the user's explicit choice from the
+Русский / English buttons (/start, /lang), else the profile default (CIS languages -> ru). The
+choice is kept in memory only (CHOICES), bounded, cleared by /forget and lost on restart.
 """
 import json
 import logging
@@ -19,7 +23,7 @@ import urllib.request
 
 from app import lang, waitlist
 from app.intake.parse import parse_update
-from app.photo_checks import parse_feedback_data
+from app.photo_checks import Reply, parse_feedback_data
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API = f"https://api.telegram.org/bot{TOKEN}"
@@ -33,6 +37,9 @@ ALLOWED_UPDATES = ["message", "callback_query"]
 TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(encoding="utf-8"))
 
 log = logging.getLogger("bot")
+
+# Explicit language choices, user id -> "ru"|"en". Memory only: lost on restart, cleared by /forget.
+CHOICES = lang.Choices()
 
 
 def call(method, params=None, timeout=POLL_TIMEOUT + 10):
@@ -66,7 +73,13 @@ def reply_lang(msg):
     if not lang.IMPLEMENTED:  # task L10; Russian until it lands
         return "ru"
     try:
-        return lang.pick_lang(msg.get("text"), (msg.get("from") or {}).get("language_code"))
+        sender = msg.get("from") or {}
+        user = sender.get("id") if type(sender.get("id")) is int else None
+        picked = lang.pick_lang(msg.get("text"), sender.get("language_code"),
+                                CHOICES.get(user) if user is not None else None)
+        if user is not None and lang.payload_lang(msg.get("text")):
+            CHOICES.set(user, picked)  # a /start payload also sets the choice
+        return picked
     except Exception:  # a language pick must never take the bot down
         log.exception("pick_lang failed")
         return "ru"
@@ -100,6 +113,7 @@ def forget(user, photo_checks=None):
     Each store is rewritten atomically; failures are logged by code only, never an id.
     """
     done = True
+    CHOICES.forget(user)
     try:
         waitlist.forget(user)
     except waitlist.WaitlistError as exc:
@@ -144,14 +158,37 @@ def send_reply(chat, text):
     call("sendMessage", params)
 
 
+def lang_markup(text):
+    """The reply text with the Русский / English keyboard attached."""
+    return Reply(text, lang.keyboard())
+
+
+def handle_lang_callback(query, code):
+    """A press on a language button: set the choice, confirm once in the new language."""
+    chat = (query.get("message") or {}).get("chat") or {}
+    user = (query.get("from") or {}).get("id")
+    if chat.get("type") != "private" or type(user) is not int or type(chat.get("id")) is not int:
+        return
+    CHOICES.set(user, code)
+    send_reply(chat["id"], TEXTS[code]["lang_set"])
+
+
 def handle_callback(update, photo_checks):
-    """Every callback_query is answered (no text); a feedback press gets its reply."""
+    """Every callback_query is answered (no text); a language press sets the choice, a feedback
+    press gets its reply."""
     query = update["callback_query"]
     if query.get("id") is not None:
         try:
             call("answerCallbackQuery", {"callback_query_id": query["id"]})
         except Exception as exc:
             log.warning("answerCallbackQuery error: %s", type(exc).__name__)
+    code = lang.parse_callback(query.get("data"))
+    if code is not None:
+        try:
+            handle_lang_callback(query, code)
+        except Exception as exc:
+            log.warning("language choice error: %s", type(exc).__name__)
+        return
     if photo_checks is None:
         return
     event = parse_feedback(update)
@@ -174,6 +211,9 @@ def handle(update, *, photo_checks=None):
     chat = (msg.get("chat") or {}).get("id")
     if chat is None:
         return
+    if is_command(msg.get("text"), "lang") or is_command(msg.get("text"), "language"):
+        send_reply(chat, lang_markup(TEXTS.get(reply_lang(msg), TEXTS["ru"])["lang_prompt"]))
+        return
     if photo_checks is not None:
         try:
             event = parse_update(update)
@@ -195,7 +235,7 @@ def handle(update, *, photo_checks=None):
             if is_new:
                 log.info("new user from source=%s totals=%s", source, waitlist.counts())
         if photo_checks is None:
-            call("sendMessage", {"chat_id": chat, "text": texts["welcome"]})
+            send_reply(chat, lang_markup(texts["welcome"]))
             return
     if photo_checks is not None:
         try:
@@ -204,6 +244,8 @@ def handle(update, *, photo_checks=None):
             # Includes cleanup failure: no verdict and no raw exception/photo data.
             log.warning("photo processing stopped")
             return
+        if messages and is_command(msg.get("text"), "start"):
+            messages = [lang_markup(messages[0])] + list(messages[1:])  # keyboard on the welcome
         for text in messages:
             send_reply(chat, text)
     else:

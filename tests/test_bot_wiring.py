@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from app import check_counter, spend_cap, vision_compare, vision_wiring
+from app import check_counter, lang, spend_cap, vision_compare, vision_wiring
 from app.photo_checks import TEXTS
 from tests.test_t4_vision import ENV as VISION_ENV, FakeModel, JPEG, KEY, PNG
 
@@ -103,6 +103,9 @@ class WiringBase(unittest.TestCase):
         self.env = dict(VISION_ENV, CHECK_COUNTER_SALT=SALT)
         self.telegram = FakeTelegram()
         self.built = []
+        patcher = patch.object(self.bot, "CHOICES", lang.Choices())  # no language choice leaks between tests
+        patcher.start()
+        self.addCleanup(patcher.stop)
         waitlist_path = os.path.join(self.tmp.name, "waitlist", "waitlist.json")
         for name, value in (("DATA_DIR", os.path.dirname(waitlist_path)), ("PATH", waitlist_path)):
             patcher = patch.object(self.bot.waitlist, name, value)

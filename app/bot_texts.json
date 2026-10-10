@@ -35,7 +35,9 @@
     "code_model": "Модель",
     "code_other": "Другое",
     "feedback_thanks": "Спасибо! Записан только код отличия: без фото и без данных о вас.",
-    "feedback_refused": "Отметить можно только последнюю проверку, один раз."
+    "feedback_refused": "Отметить можно только последнюю проверку, один раз.",
+    "lang_prompt": "Язык ответов: русский. Выберите язык:",
+    "lang_set": "Язык: русский."
   },
   "en": {
     "name": "LookTwin · Photo check",
@@ -73,6 +75,8 @@
     "code_model": "Model",
     "code_other": "Other",
     "feedback_thanks": "Thanks! Only the difference code was recorded: no photos and no data about you.",
-    "feedback_refused": "Only your last check can be marked, and only once."
+    "feedback_refused": "Only your last check can be marked, and only once.",
+    "lang_prompt": "Reply language: English. Choose a language:",
+    "lang_set": "Language: English."
   }
 }
