@@ -1,6 +1,6 @@
 """Smoke-test controls for the status rule (run by the orchestrator, with a key).
 
-    python3 -m app.vision_controls MANIFEST.json [--repeats 3] [--gate]
+    python3 -m app.vision_controls MANIFEST.json [--repeats 3] [--gate] [--codes FILE]
 
 MANIFEST is a JSON list of {"kind": "same"|"recrop"|"different", "ref": path, "cand": path}:
   same       positive control: the photo against itself (cand may be omitted)
@@ -16,6 +16,9 @@ provider call) and the run passes only if positive MATCH >= 90% and negative MIS
 (UNAVAILABLE counts against both): prints CONTROLS PASS (exit 0) or CONTROLS FAIL (exit 1).
 A recrop row whose cand equals ref is refused (exit 2): by validate_manifest under --gate,
 by a row check in default mode.
+--codes FILE writes one line per run: `kind=<kind> check_codes v=1 a=<STATUS> n=<N> codes=<compact>`
+(per-attribute codes, WP-CONTROLS-01; or `kind=<kind> unavailable` when the run has no record)
+for `python3 -m app.recompute FILE`. No image path, claim, label or model text is written.
 After the results it prints the format-reject counts by stage x rule (fixed rule codes from
 app.answer_rules, only for the real provider path; none when `compare` is injected).
 Prints nothing but counts, kinds and fixed codes: no file paths, bytes or model text.
@@ -33,10 +36,12 @@ KINDS = POSITIVE + ("different",)
 THRESHOLD = 0.90
 
 
-def run_controls(rows, compare, repeats, read, outcomes=None):
+def run_controls(rows, compare, repeats, read, outcomes=None, record_box=None, on_run=None):
     """tally[kind][status] -> count. `read(path)` returns bytes.
 
-    If `outcomes` is a list, every run is appended to it as (kind, status)."""
+    If `outcomes` is a list, every run is appended to it as (kind, status).
+    `record_box` (a list the compare callable's on_codes appends to) and `on_run(kind, status,
+    record)` carry the per-attribute code record of each run (None when it has none)."""
     tally = {k: {s: 0 for s in STATUSES} for k in KINDS}
     for row in rows:
         kind = row["kind"]
@@ -45,11 +50,15 @@ def run_controls(rows, compare, repeats, read, outcomes=None):
         ref = read(row["ref"])
         cand = ref if kind == "same" and not row.get("cand") else read(row["cand"])
         for _ in range(repeats):
+            if record_box is not None:
+                del record_box[:]
             status = compare(ref, cand).get("status")
             status = status if status in STATUSES else "UNAVAILABLE"
             tally[kind][status] += 1
             if outcomes is not None:
                 outcomes.append((kind, status))
+            if on_run is not None:
+                on_run(kind, status, record_box[-1] if record_box else None)
     return tally
 
 
@@ -66,21 +75,31 @@ def summarize(tally):
     return out
 
 
-def _main(argv, environ, compare=None, read=None):
+def _main(argv, environ, compare=None, read=None, make=None):
     repeats, args = 3, list(argv)
     gate = "--gate" in args
     args = [a for a in args if a != "--gate"]
+    codes_path = None
+    if "--codes" in args:
+        i = args.index("--codes")
+        if i + 1 >= len(args):
+            print("usage: --codes needs a file")
+            return 2
+        codes_path = args[i + 1]
+        del args[i:i + 2]
     if "--repeats" in args:
         i = args.index("--repeats")
         repeats = int(args[i + 1])
         del args[i:i + 2]
     if len(args) != 1 or repeats < 1:
-        print("usage: python3 -m app.vision_controls MANIFEST.json [--repeats N] [--gate]")
+        print("usage: python3 -m app.vision_controls MANIFEST.json [--repeats N] [--gate] [--codes FILE]")
         return 2
     rejects = RejectTally()
+    record_box = []
     if compare is None:
-        from app.vision_compare import compare_from_env
-        compare = compare_from_env(environ, on_reject=rejects.add)
+        if make is None:
+            from app.vision_compare import compare_from_env as make
+        compare = make(environ, on_reject=rejects.add, on_codes=record_box.append)
         if compare is None:
             print("vision not configured")
             return 2
@@ -97,8 +116,28 @@ def _main(argv, environ, compare=None, read=None):
            for r in rows):
         print("manifest refused: RECROP_SAME_FILE")
         return 2
+    codes_file = None
+    on_run = None
+    if codes_path is not None:
+        try:
+            codes_file = open(codes_path, "w", encoding="utf-8")
+        except OSError:
+            print("codes file unusable")   # never the path
+            return 2
+
+        def on_run(kind, status, record):
+            if record:
+                from app.vision_core import codes_line   # needs core_t2, like the real chain
+                codes_file.write("kind=%s %s\n" % (kind, codes_line(record)))
+            elif status == "UNAVAILABLE":
+                codes_file.write("kind=%s unavailable\n" % kind)
+            codes_file.flush()
     outcomes = []
-    tally = run_controls(rows, compare, repeats, read, outcomes)
+    try:
+        tally = run_controls(rows, compare, repeats, read, outcomes, record_box, on_run)
+    finally:
+        if codes_file is not None:
+            codes_file.close()
     if gate:
         verdict = controls_gate.gate(outcomes)
         print(*rejects.lines(), sep="\n")   # before the report: it ends with the verdict line

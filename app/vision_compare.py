@@ -138,7 +138,7 @@ def _report(on_call, cost):
 
 
 def make_compare(config, environ, call_provider, core, transport=None, on_call=None,
-                 on_begin=None, on_not_sent=None, on_reject=None):
+                 on_begin=None, on_not_sent=None, on_reject=None, on_codes=None):
     """compare(reference, candidate) -> the vision_core.assess dict, or {"status": "UNAVAILABLE"}.
 
     Never raises ProviderUnavailable: any provider failure (MISSING_KEY, TIMEOUT,
@@ -161,6 +161,9 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
 
     `on_reject(stage, code, rule)` (optional, for the controls table) runs after a format
     reject whose rule is known; it gets fixed codes only and cannot change the check.
+
+    Every completed check logs one `check_codes` line (WP-CONTROLS-01) and hands the code
+    record to `on_codes(record)` (optional, the controls run); neither can change the check.
     """
     if transport is None:
         transport = make_transport(config["base_url"], config["timeout"],
@@ -205,6 +208,21 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
                     pass
         del fixes[:]
 
+    def emit_codes(core, validated, answer_first, answer_second, result):
+        """One log line and one callback per completed check; enum codes only, never fatal."""
+        try:
+            record = core.code_record(validated, answer_first, answer_second)
+            record["a"] = result["status"]
+            log.info("%s", core.codes_line(record))
+        except Exception:
+            log.error("check_codes_error code=RECORD")
+            return
+        if on_codes is not None:
+            try:
+                on_codes(record)
+            except Exception:
+                pass
+
     def compare(reference, candidate):
         unavailable = {"status": "UNAVAILABLE"}
         stage = "inventory"
@@ -221,7 +239,9 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
             answer_second = core.parse_compare(ask(stage, second), validated, fixes)
             report_fixes(stage, fixes)
             stage = "assess"
-            return core.assess(validated, answer_first, answer_second)
+            result = core.assess(validated, answer_first, answer_second)
+            emit_codes(core, validated, answer_first, answer_second, result)
+            return result
         except ImageRejected as exc:
             log.warning("vision_rejected code=%s", exc.args[0])
             reason = IMAGE_REASONS.get(exc.args[0])
@@ -262,7 +282,7 @@ def _default_core():
 
 
 def compare_from_env(environ, *, transport=None, core=None, on_call=None, on_begin=None,
-                     on_not_sent=None, on_reject=None):
+                     on_not_sent=None, on_reject=None, on_codes=None):
     """The compare callable, or None (not configured, or T3b / the T2 core unavailable).
 
     Every provider call goes through core_t3's call_provider; it is not injectable,
@@ -280,7 +300,7 @@ def compare_from_env(environ, *, transport=None, core=None, on_call=None, on_beg
         log.warning("vision disabled, T2 core unavailable")
         return None
     return make_compare(config, environ, call_provider, core, transport, on_call,
-                        on_begin, on_not_sent, on_reject)
+                        on_begin, on_not_sent, on_reject, on_codes)
 
 
 def _main(argv, environ):

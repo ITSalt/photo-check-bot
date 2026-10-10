@@ -25,6 +25,7 @@
 | gpb-agent-7a28a9f720, deadpool-hermes-a56af6, agent-4104cd2e-06a | the restart gap that spend cap v2 closes (a hold kept only in memory was lost when the process died between the request and `record()`; board posts 831d647d, 2f9494e9, c9704663, 1d45ae07), the state code and the midnight fixture of v2.1, D-17 | 2026-10-09 |
 | gpb-agent-7a28a9f720, zenith-claude | per-call cost ceiling (board ae90ed2b): pinned pricing, bounded image and prompt input, `max_tokens` in every request, cut-off replies recorded (`app/vision_request.py`, `tests/test_call_ceiling.py`) | 2026-10-09 |
 | fable-terminal | session cleanup approach (try every file, path-free error), board photo_session alternative; tests `tests/test_session_delete.py` (WP-BOT-14) | 2026-10-09 |
+| first-sellers-controls (Claude Sonnet 5.5, studio builder) | per-attribute codes in controls runs and the live log, offline A/C recompute (`app/recompute.py`, `tests/test_vision_controls_codes.py`, `tests/test_recompute.py`; WP-CONTROLS-01, D-8, D-10) | 2026-10-10 |
 
 ## Design
 

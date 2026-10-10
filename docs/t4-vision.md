@@ -216,6 +216,38 @@ Spend cap v2 adds `spend_cap_error code=BEGIN` (a request mark could not be writ
 sent), `spend_cap_orphan hold=<id> day=<day> usd=<usd>` at startup, and the cap's own
 `spend_cap_error code=...` lines with a hold id and amount; hold ids are random, not user data.
 
+### Per-attribute codes (WP-CONTROLS-01, D-8, D-10)
+
+One line per completed check (`assess` returned; never for a refusal or UNAVAILABLE), logged by
+`compare` in `app/vision_compare.py`:
+`check_codes v=1 a=<A status> n=<attributes> codes=<compact>`. `a` is the `assess` status.
+Enum codes and small integers only, alphabet `[0-9A-Za-z,;]`, `codes` at most 160 characters
+(12 attributes use about 100): no claim, label, observation, attribute_id, roi value, user,
+chat or file id, no hash. The result of `assess` is unchanged.
+
+`codes` = one token per attribute in inventory order, joined by `,`, then `;` and the extra code.
+Token = `<pos><outcome><ev1><ev2><fine><class>`:
+
+| Field | Codes |
+|-------|-------|
+| `pos` | 1.. (inventory position) |
+| `outcome` (T2, both orders) | `M` MATCH, `X` MISMATCH, `N` NEEDS_REVIEW, `A` ASYMMETRIC_PASS, `V` NOT_VISIBLE_IN_REFERENCE |
+| `ev1`, `ev2` (evidence, first and second order) | `D` DIRECT, `P` PARTIAL, `N` NONE |
+| `fine` | `1` reference box area < `FINE_ROI_AREA`, else `0` |
+| `class` (final, used by rule A) | `C` confirmed, `D` differs, `V` not_visible, `O` orders_disagree, `W` weak_evidence, `F` fine_detail_unverified |
+| extra (after `;`) | `n` none, `u` unconfirmed, `c` confirmed |
+
+Example: `check_codes v=1 a=NEEDS_REVIEW n=2 codes=1NPP1F,2MDD0C;n`.
+
+`python3 -m app.vision_controls MANIFEST --codes FILE` writes the same line per run, prefixed by
+`kind=same|recrop|different` (`kind=<kind> unavailable` for a run without a record), no image path.
+`python3 -m app.recompute FILE [FILE ...]` reads such files or bot logs and recomputes:
+rule A (as built; must equal the recorded `a=` on every line, otherwise exit 1 with the count),
+rule B (coarse PARTIAL+ counts) as `n/a (flag missing)` until WP-CONTROLS-02 gives a
+text/logo/count flag, rule C (rule A on the first 8 inventory attributes, extra element kept, D-10).
+Per rule it prints the positive MATCH share (lines with a kind; UNAVAILABLE counts against), the
+false MATCH count on `different`, the NEEDS_REVIEW share and the line count; never a line's content.
+
 ### Format-reject diagnostics (WP-BOT-15)
 
 A format reject (`BAD_INVENTORY`, `BAD_COMPARE`) logs which rule failed:
@@ -430,6 +462,7 @@ config. Uses the real T3b `call_provider`; needs `core_t2/` and `core_t3/` on th
 runs through the real `core_t3` `call_provider`, and a spy test asserts it is called once
 per stage). `tests/test_image_layout.py` rebuilds `/app` from the Dockerfile's `COPY`
 lines and imports the chain there.
+`tests/test_vision_controls_codes.py` and `tests/test_recompute.py` cover the per-attribute codes and the recompute (WP-CONTROLS-01).
 `tests/test_call_ceiling.py` covers the per-call ceiling (WP-BOT-12 criterion 4) and
 `tests/test_spend_cap_v2_wiring.py` the spend cap v2 wiring (begin, not_sent, a process
 killed between begin and record, v1 ledger, orphan settle, settle closing the reservation).

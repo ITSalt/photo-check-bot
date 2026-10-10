@@ -797,8 +797,9 @@ class ChainTests(unittest.TestCase):
         for usage in (None, "x", {}, {"prompt_tokens": "9", "completion_tokens": True, "cost": float("nan")}):
             with self.assertLogs("vision", "INFO") as logs:
                 self.run_chain(FakeModel(usage=usage))
-            self.assertEqual(len(logs.output), 3)
-            for line in logs.output:
+            calls = [line for line in logs.output if "vision_call" in line]
+            self.assertEqual((len(calls), len(logs.output)), (3, 4))   # + one check_codes line
+            for line in calls:
                 self.assertIn("usage_prompt=n/a usage_completion=n/a cost=n/a", line)
 
     def test_logs_hold_no_secret_bytes_or_model_text(self):
