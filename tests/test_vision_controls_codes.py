@@ -37,33 +37,34 @@ class CodeStringTests(unittest.TestCase):
         self.assertEqual((record["a"], result["status"]), (status, status))
 
     def test_match(self):
-        self.check(both(None), "1MDD0C,2MDD0C;n", "MATCH")
+        self.check(both(None), "1MDD011C,2MDD011C;n", "MATCH")
 
     def test_mismatch(self):
-        self.check(both({"print.layout": ("MISMATCH", "DIRECT")}), "1MDD0C,2XDD0D;n", "MISMATCH")
+        self.check(both({"print.layout": ("MISMATCH", "DIRECT")}), "1MDD011C,2XDD010D;n", "MISMATCH")
 
     def test_each_review_reason(self):
-        self.check(both({"button.count": ("MATCH", "PARTIAL")}), "1NPP0W,2MDD0C;n", "NEEDS_REVIEW")
+        self.check(both({"button.count": ("MATCH", "PARTIAL")}), "1NPP011W,2MDD011C;n", "NEEDS_REVIEW")
         self.check(both({"button.count": ("NOT_VISIBLE_IN_REFERENCE", "NONE")}),
-                   "1VNN0V,2MDD0C;n", "NEEDS_REVIEW")
-        self.check(both({"button.count": ("MISMATCH", "NONE")}), "1NNN0V,2MDD0C;n", "NEEDS_REVIEW")
+                   "1VNN010V,2MDD011C;n", "NEEDS_REVIEW")
+        self.check(both({"button.count": ("MISMATCH", "NONE")}), "1NNN010V,2MDD011C;n", "NEEDS_REVIEW")
         self.check([(None, ()), ({"button.count": ("MISMATCH", "DIRECT")}, ())],
-                   "1ADD0O,2MDD0C;n", "NEEDS_REVIEW")
-        self.check(both({"logo.text": ("MATCH", "PARTIAL")}), "1NPP1F,2MDD0C;n", "NEEDS_REVIEW",
+                   "1ADD010O,2MDD011C;n", "NEEDS_REVIEW")
+        self.check(both({"logo.text": ("MATCH", "PARTIAL")}), "1NPP111F,2MDD011C;n", "NEEDS_REVIEW",
                    inventory=[FINE, INV[1]])
 
     def test_extra_element(self):
-        self.check(both(None, (EXTRA,)), "1MDD0C,2MDD0C;c", "MISMATCH")
-        self.check([(None, (EXTRA,)), (None, ())], "1MDD0C,2MDD0C;u", "NEEDS_REVIEW")
+        self.check(both(None, (EXTRA,)), "1MDD011C,2MDD011C;c", "MISMATCH")
+        self.check([(None, (EXTRA,)), (None, ())], "1MDD011C,2MDD011C;u", "NEEDS_REVIEW")
         occluded = {**EXTRA, "visibility_in_reference": "OCCLUDED_IN_REFERENCE"}
-        self.check(both(None, (occluded,)), "1MDD0C,2MDD0C;u", "NEEDS_REVIEW")
+        self.check(both(None, (occluded,)), "1MDD011C,2MDD011C;u", "NEEDS_REVIEW")
 
     def test_line_shape_alphabet_and_cap(self):
         record, _ = record_of(both(None))
-        self.assertEqual(vision_core.codes_line(record), "check_codes v=1 a=MATCH n=2 codes=1MDD0C,2MDD0C;n")
+        self.assertEqual(vision_core.codes_line(record), "check_codes v=2 a=MATCH n=2 codes=1MDD011C,2MDD011C;n")
         worst = {"a": "MATCH", "extra": "unconfirmed",
                  "attrs": [{"pos": i, "outcome": "ASYMMETRIC_PASS", "evidence": ("PARTIAL", "NONE"),
-                            "fine": True, "cls": "fine_detail_unverified"} for i in range(1, 13)]}
+                            "fine": True, "tlc": True, "both_match": True,
+                            "cls": "fine_detail_unverified"} for i in range(1, 13)]}
         codes = vision_core.format_codes(worst)
         self.assertTrue(codes.endswith(";u"))      # 12 attributes fit the cap untruncated
         self.assertRegex(codes, r"^[0-9A-Za-z,;]+$")
@@ -102,8 +103,8 @@ class LiveLogTests(unittest.TestCase):
             self.run_chain(FakeModel(per_order=(diff, diff)))
         lines = self.codes_lines(logs)
         self.assertEqual(len(lines), 2)
-        self.assertTrue(lines[0].endswith("check_codes v=1 a=MATCH n=2 codes=1MDD0C,2MDD0C;n"))
-        self.assertTrue(lines[1].endswith("check_codes v=1 a=MISMATCH n=2 codes=1MDD0C,2XDD0D;n"))
+        self.assertTrue(lines[0].endswith("check_codes v=2 a=MATCH n=2 codes=1MDD011C,2MDD011C;n"))
+        self.assertTrue(lines[1].endswith("check_codes v=2 a=MISMATCH n=2 codes=1MDD011C,2XDD010D;n"))
         self.assertLess(max(len(x) for x in lines), 300)
 
     def test_none_for_unavailable_and_refusals(self):
@@ -185,7 +186,7 @@ class ControlsCodesTests(unittest.TestCase):
     def test_round_trip(self):
         code, out, text = run_main(self.ROWS, model_make(self.models()))
         self.assertEqual(len(text.splitlines()), 3)
-        self.assertEqual(text.splitlines()[0], "kind=same check_codes v=1 a=MATCH n=2 codes=1MDD0C,2MDD0C;n")
+        self.assertEqual(text.splitlines()[0], "kind=same check_codes v=2 a=MATCH n=2 codes=1MDD011C,2MDD011C;n")
         self.assertNotIn("privatefile", text + out)
         self.assertNotIn("secretcodes", out)
         result = recompute.recompute(text.splitlines())

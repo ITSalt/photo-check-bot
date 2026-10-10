@@ -217,17 +217,28 @@ Spend cap v2 adds `spend_cap_error code=BEGIN` (a request mark could not be writ
 sent), `spend_cap_orphan hold=<id> day=<day> usd=<usd>` at startup, and the cap's own
 `spend_cap_error code=...` lines with a hold id and amount; hold ids are random, not user data.
 
-### Per-attribute codes (WP-CONTROLS-01, D-8, D-10)
+### Verdict feedback (WP-UX-02)
+
+Under each verdict the bot offers a button "the verdict is wrong". A press asks for one difference
+code (`color`, `size`, `logo`, `model`, `other`; `FEEDBACK_CODES` in `app/photo_checks.py`). The
+press is accepted once, for the user's last verdict only, within 24 hours, and is kept in memory
+only. One accepted code logs one line: `verdict_feedback a=<A status> diff=<code>`. No user,
+chat, token or file id and no free text is logged or stored. A refused press (no verdict, wrong
+token, already reported, older than 24 hours, unknown code) gets the `feedback_refused` text and
+no log line.
+
+### Per-attribute codes (WP-CONTROLS-01/02, D-8, D-10)
 
 One line per completed check (`assess` returned; never for a refusal or UNAVAILABLE), logged by
 `compare` in `app/vision_compare.py`:
-`check_codes v=1 a=<A status> n=<attributes> codes=<compact>`. `a` is the `assess` status.
+`check_codes v=2 a=<A status> n=<attributes> codes=<compact>`. `a` is the `assess` status.
 Enum codes and small integers only, alphabet `[0-9A-Za-z,;]`, `codes` at most 160 characters
-(12 attributes use about 100): no claim, label, observation, attribute_id, roi value, user,
-chat or file id, no hash. The result of `assess` is unchanged.
+(12 attributes use about 115): no claim, label, observation, attribute_id, roi value, user,
+chat or file id, no hash. The result of `assess` is unchanged. If the line cannot be built the
+log gets `check_codes_error code=RECORD` and the check goes on.
 
 `codes` = one token per attribute in inventory order, joined by `,`, then `;` and the extra code.
-Token = `<pos><outcome><ev1><ev2><fine><class>`:
+Token = `<pos><outcome><ev1><ev2><fine><tlc><mm><class>`:
 
 | Field | Codes |
 |-------|-------|
@@ -235,19 +246,35 @@ Token = `<pos><outcome><ev1><ev2><fine><class>`:
 | `outcome` (T2, both orders) | `M` MATCH, `X` MISMATCH, `N` NEEDS_REVIEW, `A` ASYMMETRIC_PASS, `V` NOT_VISIBLE_IN_REFERENCE |
 | `ev1`, `ev2` (evidence, first and second order) | `D` DIRECT, `P` PARTIAL, `N` NONE |
 | `fine` | `1` reference box area < `FINE_ROI_AREA`, else `0` |
+| `tlc` (v=2) | `1` the claim names a text, a logo or a count (`vision_core.text_logo_count`), else `0` |
+| `mm` (v=2) | `1` the verdict was MATCH in both orders (the outcome alone cannot tell MATCH from MISMATCH when the evidence is PARTIAL), else `0` |
 | `class` (final, used by rule A) | `C` confirmed, `D` differs, `V` not_visible, `O` orders_disagree, `W` weak_evidence, `F` fine_detail_unverified |
 | extra (after `;`) | `n` none, `u` unconfirmed, `c` confirmed |
 
-Example: `check_codes v=1 a=NEEDS_REVIEW n=2 codes=1NPP1F,2MDD0C;n`.
+Example: `check_codes v=2 a=NEEDS_REVIEW n=2 codes=1NPP011W,2MDD001C;n`.
+Version 1 (WP-CONTROLS-01) had no `tlc` and no `mm`: `<pos><outcome><ev1><ev2><fine><class>`; the
+recompute still reads such lines (rule B is n/a for them).
+
+The text/logo/count flag (WP-CONTROLS-02, D-2 option (a), D-5) is a runtime keyword heuristic
+over the inventory claim, boolean only: `vision_core.TEXT_LOGO_COUNT_RULE` (sha256 of its
+canonical JSON `2ca36df28ba6edba6da3befeacc00f4a68f84504e473500541d3f07c54d40eeb`, pinned in
+`tests/test_vision_controls_flag.py`) and `text_logo_count(claim)`. The claim is model text: it is
+used in memory to compute the boolean and is never stored, logged or printed. Known miss
+(backlog): `двойной шов` is not flagged. The flag only feeds rule B in the recompute; the production
+verdict stays rule A.
 
 `python3 -m app.vision_controls MANIFEST --codes FILE` writes the same line per run, prefixed by
 `kind=same|recrop|different` (`kind=<kind> unavailable` for a run without a record), no image path.
 `python3 -m app.recompute FILE [FILE ...]` reads such files or bot logs and recomputes:
 rule A (as built; must equal the recorded `a=` on every line, otherwise exit 1 with the count),
-rule B (coarse PARTIAL+ counts) as `n/a (flag missing)` until WP-CONTROLS-02 gives a
-text/logo/count flag, rule C (rule A on the first 8 inventory attributes, extra element kept, D-10).
+rule B (a coarse attribute, not fine and not text/logo/count, counts as confirmed with MATCH in
+both orders and evidence PARTIAL or better; v=2 lines only, v=1 lines are counted and left out),
+rule C (rule A on the first 8 inventory attributes, D-10). B and C keep the extra-element outcome.
 Per rule it prints the positive MATCH share (lines with a kind; UNAVAILABLE counts against), the
-false MATCH count on `different`, the NEEDS_REVIEW share and the line count; never a line's content.
+false MATCH count on `different`, the NEEDS_REVIEW share and the line count; shares have one
+decimal, rounded half up; never a line's content. A `check_codes_error` line is skipped and
+counted separately; a class letter that contradicts its outcome/evidence/fine is counted and
+gives exit 1, like an unparsable line or a recorded A that differs.
 
 ### Format-reject diagnostics (WP-BOT-15)
 
@@ -463,7 +490,8 @@ config. Uses the real T3b `call_provider`; needs `core_t2/` and `core_t3/` on th
 runs through the real `core_t3` `call_provider`, and a spy test asserts it is called once
 per stage). `tests/test_image_layout.py` rebuilds `/app` from the Dockerfile's `COPY`
 lines and imports the chain there.
-`tests/test_vision_controls_codes.py` and `tests/test_recompute.py` cover the per-attribute codes and the recompute (WP-CONTROLS-01).
+`tests/test_vision_controls_codes.py` and `tests/test_recompute.py` cover the per-attribute codes and the recompute (WP-CONTROLS-01);
+`tests/test_vision_controls_flag.py` covers the text/logo/count flag, code record v=2 and rule B (WP-CONTROLS-02).
 `tests/test_call_ceiling.py` covers the per-call ceiling (WP-BOT-12 criterion 4) and
 `tests/test_spend_cap_v2_wiring.py` the spend cap v2 wiring (begin, not_sent, a process
 killed between begin and record, v1 ledger, orphan settle, settle closing the reservation).
