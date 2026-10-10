@@ -61,13 +61,13 @@ class SessionDeleteHardening(unittest.TestCase):
                 s.delete_all()
         self.assertFalse(os.path.exists(s.candidate_path), "second file not attempted")
 
-    def test_path_outside_dest_dir_is_refused_and_removed(self):
+    def test_path_outside_dest_dir_is_refused_and_left_alone(self):
         outside = os.path.join(self.tmp.name, "elsewhere.bin")
         def rogue(get_file, fetch, file_id, dest_dir, max_bytes):
             open(outside, "wb").close(); return outside
         with mock.patch.object(sf, "download", rogue), self.assertRaises(OSError):
             self.factory()("r", "c")
-        self.assertFalse(os.path.exists(outside))
+        self.assertTrue(os.path.exists(outside))   # WP-UX-04: never unlink outside the session
 
     def test_failed_delete_error_has_no_path_and_all_steps_are_attempted(self):
         s = self.factory()("r", "c")

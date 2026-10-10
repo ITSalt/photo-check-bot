@@ -9,9 +9,14 @@ the declared and on the streamed size). If either download fails, everything alr
 written is removed and the exception is re-raised. Session.delete_all() removes both
 files and the directory and raises if it cannot (T3a: no verdict then).
 
-Nothing here logs: no file id, path or bytes can reach a log line.
+Photos are deleted when the file system allows it; a failure is never silent: a failed
+cleanup on the failure path logs the fixed code `session_cleanup_incomplete` and leaves the
+directory for prepare_root's sweep at the next startup. That fixed code is the only thing
+logged here: no file id, path, errno text or bytes can reach a log line. Only files inside
+the session's own directory are ever deleted.
 """
 import errno
+import logging
 import os
 import shutil
 import tempfile
@@ -19,6 +24,7 @@ import tempfile
 from app.intake.download import download
 
 SESSION_PREFIX = "chk-"
+log = logging.getLogger("session_factory")
 
 
 class Session:
@@ -62,7 +68,8 @@ def _remove_tree(directory):
     try:
         shutil.rmtree(directory)
     except OSError:
-        pass
+        # Fixed code only: no path, no errno text. prepare_root sweeps it at startup.
+        log.warning("session_cleanup_incomplete")
 
 
 def make_session_factory(api_get_file, api_fetch, dest_dir, max_bytes):
@@ -80,10 +87,7 @@ def make_session_factory(api_get_file, api_fetch, dest_dir, max_bytes):
             for path in (reference, candidate):
                 if os.path.dirname(os.path.abspath(path)) != directory:
                     # Defence in depth: whatever download returned must sit in our directory.
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
+                    # Never unlink it: a path outside the session is not ours to delete.
                     raise OSError(errno.EINVAL, "download returned a path outside the session")
         except BaseException:
             _remove_tree(directory)
