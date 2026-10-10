@@ -216,6 +216,55 @@ Spend cap v2 adds `spend_cap_error code=BEGIN` (a request mark could not be writ
 sent), `spend_cap_orphan hold=<id> day=<day> usd=<usd>` at startup, and the cap's own
 `spend_cap_error code=...` lines with a hold id and amount; hold ids are random, not user data.
 
+### Format-reject diagnostics (WP-BOT-15)
+
+A format reject (`BAD_INVENTORY`, `BAD_COMPARE`) logs which rule failed:
+`vision_bad_answer stage=<stage> code=BAD_INVENTORY|BAD_COMPARE rule=<RULE> [path=<path>] [count=<n>] [missing=<a,b>]`.
+`app/answer_rules.py` classifies the T2 `ContractError` by our own fixed message templates and
+never prints the message (it embeds model values). `path` is the schema path with indices and
+our field names only (`attributes[3].reference_roi`, `results[1]`); a field name the model
+invented is never printed (`FIELDS_UNKNOWN` carries `count` only); `missing` lists our own
+field names (`FIELDS_MISSING`). Anything that does not match a template is `OTHER`. An
+`AnswerError` without a rule (`NOT_JSON`, `CUT_OFF`, ...) keeps the old line. The user-facing
+behaviour (UNAVAILABLE, not charged) and the T2 contract are unchanged.
+
+`python3 -m app.vision_controls` prints `rejects by stage x rule:` with `stage=... rule=... n=...`
+lines (fixed codes and counts, no paths, no model text); under `--gate` the table comes before
+the PASS/FAIL line.
+
+Repairs before validation (D-20), logged as `vision_answer_fixed stage=<stage> rule=<RULE> [n=<count>]` (codes and counts only):
+
+- `ROI_CLAMPED`: a box with x+w > 1000 or y+h > 1000 (x, y in [0, 999], w, h >= 1) gets w = min(w, 1000-x), h = min(h, 1000-y) in `app/vision_core.py` before T2 validation (inventory `reference_roi`; compare `reference_roi`, `candidate_roi`, unmapped `candidate_roi`). x or y outside the frame, or an area < 100 after clamping, is rejected by T2 as before. The clamped inventory is what is hashed and sent to the compare calls. A clamped reference box is smaller, so it may cross `FINE_ROI_AREA`: that only changes the reason label of an attribute already under review (`fine_detail_unverified`), never the status.
+- `TRAILING_TAIL`: `extract_answer` parses the first complete JSON object; a tail made only of whitespace and `}` `]` backtick is accepted. Any other tail stays `NOT_JSON`.
+
+The controls table also prints `repaired answers by stage x rule:` with these two counts (once per call).
+
+| Rule | Meaning |
+|------|---------|
+| `WRAPPER_KEYS` | inventory answer keys are not exactly {attributes} |
+| `NO_ATTRIBUTES` | attributes is not a list, or it is empty |
+| `TOO_MANY_ATTRIBUTES` | more attributes than MAX_ATTRIBUTES |
+| `NOT_OBJECT` | an object was expected (attribute, result, element, response) |
+| `SCHEMA_VERSION` | schema_version is not the expected one |
+| `REF_ID` | reference_photo_id is not the expected one |
+| `FIELDS_MISSING` | a required field is missing (our field names printed) |
+| `FIELDS_UNKNOWN` | an unknown field is present (count only, never the name) |
+| `TEXT_LENGTH` | a text field is not a string, blank, or too long |
+| `SHA_FORMAT` | a sha256 field is not a lowercase hex digest |
+| `ROI_SHAPE` | a roi is not four integers |
+| `ROI_OUT_OF_FRAME` | a roi is outside the frame or smaller than 100 |
+| `DUP_ATTR` | duplicate attribute_id in the inventory |
+| `SHA_MISMATCH` | inventory_sha256 is not the pinned inventory |
+| `RESULTS_NOT_LIST` | results or unmapped_candidate_elements is not a list |
+| `ATTR_UNKNOWN_OR_DUP` | a result names an unknown or repeated attribute_id |
+| `VERDICT_EVIDENCE` | verdict or evidence_quality invalid, or contradictory together |
+| `ROI_NOT_NULL` | reference_roi must be null for NOT_VISIBLE_IN_REFERENCE |
+| `RESULTS_MISSING` | an inventory attribute has no result |
+| `VISIBILITY_VALUE` | visibility_in_reference is not an allowed value |
+| `NOT_CANONICAL` | the answer is not canonical JSON (NaN, Infinity, odd types) |
+| `EXPECTED_IDS` | internal: no expected attribute ids |
+| `OTHER` | no known template matched |
+
 ## Cost per check (estimate, not measured)
 
 Three calls. Assumptions (`vision_compare.ASSUMED`): 1,100 tokens per image, inventory

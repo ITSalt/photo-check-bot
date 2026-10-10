@@ -16,13 +16,16 @@ provider call) and the run passes only if positive MATCH >= 90% and negative MIS
 (UNAVAILABLE counts against both): prints CONTROLS PASS (exit 0) or CONTROLS FAIL (exit 1).
 A recrop row whose cand equals ref is refused (exit 2): by validate_manifest under --gate,
 by a row check in default mode.
-Prints nothing but counts and kinds: no paths, bytes or model text.
+After the results it prints the format-reject counts by stage x rule (fixed rule codes from
+app.answer_rules, only for the real provider path; none when `compare` is injected).
+Prints nothing but counts, kinds and fixed codes: no file paths, bytes or model text.
 """
 import json
 import logging
 import sys
 
 from app import controls_gate
+from app.answer_rules import RejectTally
 
 STATUSES = ("MATCH", "MISMATCH", "NEEDS_REVIEW", "UNAVAILABLE")
 POSITIVE = ("same", "recrop")
@@ -74,9 +77,10 @@ def _main(argv, environ, compare=None, read=None):
     if len(args) != 1 or repeats < 1:
         print("usage: python3 -m app.vision_controls MANIFEST.json [--repeats N] [--gate]")
         return 2
+    rejects = RejectTally()
     if compare is None:
         from app.vision_compare import compare_from_env
-        compare = compare_from_env(environ)
+        compare = compare_from_env(environ, on_reject=rejects.add)
         if compare is None:
             print("vision not configured")
             return 2
@@ -97,6 +101,7 @@ def _main(argv, environ, compare=None, read=None):
     tally = run_controls(rows, compare, repeats, read, outcomes)
     if gate:
         verdict = controls_gate.gate(outcomes)
+        print(*rejects.lines(), sep="\n")   # before the report: it ends with the verdict line
         print(controls_gate.format_report(verdict))
         return 0 if verdict["pass"] else 1
     result = summarize(tally)
@@ -107,6 +112,7 @@ def _main(argv, environ, compare=None, read=None):
     print("RULE TOO STRICT (positive MATCH < 90%)" if result["rule_too_strict"] else "positive control ok")
     false_match = tally["different"]["MATCH"]
     print("false MATCH on negatives: %d" % false_match)
+    print(*rejects.lines(), sep="\n")
     return 1 if result["rule_too_strict"] or false_match else 0
 
 
