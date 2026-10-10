@@ -26,7 +26,16 @@
     "forget_failed": "Не удалось удалить ваши данные. Попробуйте позже.",
     "ask_generated_after_real": "Шаг 1 из 2: фото получено. Шаг 2 из 2: пришлите сгенерированное фото товара. Фото уйдут на проверку в OpenRouter, подробнее: /privacy",
     "reminder_real": "Напоминание: для проверки не хватает фото настоящей вещи (шаг 2 из 2). Первое фото хранится ещё около {minutes} мин, потом начнём заново.",
-    "reminder_generated": "Напоминание: для проверки не хватает сгенерированного фото товара (шаг 2 из 2). Первое фото хранится ещё около {minutes} мин, потом начнём заново."
+    "reminder_generated": "Напоминание: для проверки не хватает сгенерированного фото товара (шаг 2 из 2). Первое фото хранится ещё около {minutes} мин, потом начнём заново.",
+    "feedback_button": "Вердикт неверный",
+    "feedback_ask": "Что отличается? Выберите одно.",
+    "code_color": "Цвет",
+    "code_size": "Размер",
+    "code_logo": "Логотип",
+    "code_model": "Модель",
+    "code_other": "Другое",
+    "feedback_thanks": "Спасибо! Записан только код отличия: без фото и без данных о вас.",
+    "feedback_refused": "Отметить можно только последнюю проверку, один раз."
   },
   "en": {
     "name": "LookTwin · Photo check",
@@ -55,6 +64,15 @@
     "forget_failed": "Could not delete your data. Try again later.",
     "ask_generated_after_real": "Step 1 of 2: photo received. Step 2 of 2: send the generated product photo. The photos go to OpenRouter for the check, details: /privacy",
     "reminder_real": "Reminder: the check still needs a photo of the real item (step 2 of 2). The first photo is kept for about {minutes} more min, then we start over.",
-    "reminder_generated": "Reminder: the check still needs the generated product photo (step 2 of 2). The first photo is kept for about {minutes} more min, then we start over."
+    "reminder_generated": "Reminder: the check still needs the generated product photo (step 2 of 2). The first photo is kept for about {minutes} more min, then we start over.",
+    "feedback_button": "The verdict is wrong",
+    "feedback_ask": "What differs? Pick one.",
+    "code_color": "Color",
+    "code_size": "Size",
+    "code_logo": "Logo",
+    "code_model": "Model",
+    "code_other": "Other",
+    "feedback_thanks": "Thanks! Only the difference code was recorded: no photos and no data about you.",
+    "feedback_refused": "Only your last check can be marked, and only once."
   }
 }
