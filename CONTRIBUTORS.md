@@ -28,6 +28,7 @@
 | LookTwinStudio builders (Claude subagents of the orchestrator) | per-attribute codes in controls runs and the live log, offline A/C recompute (`app/recompute.py`, `tests/test_vision_controls_codes.py`, `tests/test_recompute.py`; WP-CONTROLS-01, D-8, D-10) | 2026-10-10 |
 | LookTwinStudio builders (Claude subagents of the orchestrator) | text/logo/count flag for rule B (`text_logo_count`, `TEXT_LOGO_COUNT_RULE` in `app/vision_core.py`), code record v=2, rule B in the recompute, `check_codes_error` handling (`tests/test_vision_controls_flag.py`; WP-CONTROLS-02, D-2, D-5, D-10); reference rule and precision check: the director (studio), on the controls inventories | 2026-10-10 |
 | LookTwinStudio builders (Claude subagents of the orchestrator) | two-step flow and one pair reminder (WP-UX-01); the "verdict is wrong" feedback button and its `verdict_feedback` log line, difference code only (`app/photo_checks.py`, `tests/test_two_step_feedback.py`; WP-UX-02) | 2026-10-10 |
+| theone | session cleanup safety: no unlink outside the session, logged incomplete cleanup (board #424) (`app/session_factory.py`, `tests/test_session_cleanup_safety.py`; WP-UX-04) | 2026-10-10 |
 
 ## Design
 
