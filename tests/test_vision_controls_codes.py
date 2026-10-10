@@ -229,6 +229,21 @@ class ControlsCodesTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertNotIn("nodir", buf.getvalue())
 
+    def test_summary_percentages_have_one_decimal(self):
+        self.assertEqual([vision_controls.pct1(x) for x in (64 / 66, 1.0, 0.0, 2 / 3, 0.8995, 0.9)],
+                         ["97.0%", "100.0%", "0.0%", "66.7%", "90.0%", "90.0%"])
+        statuses = iter(["MATCH"] * 64 + ["NEEDS_REVIEW"] * 2)
+        with tempfile.TemporaryDirectory() as d:
+            m = os.path.join(d, "m.json")
+            with open(m, "w") as f:
+                json.dump([{"kind": "same", "ref": "a"}] * 66, f)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                vision_controls._main([m, "--repeats", "1"], {}, lambda a, b: {"status": next(statuses)},
+                                      lambda p: b"x")
+        self.assertIn("MATCH=97.0%", buf.getvalue())
+        self.assertIn("NEEDS_REVIEW=3.0%", buf.getvalue())
+
     def test_without_codes_flag_unchanged(self):
         with tempfile.TemporaryDirectory() as d:
             m = os.path.join(d, "m.json")

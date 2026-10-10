@@ -62,6 +62,12 @@ def run_controls(rows, compare, repeats, read, outcomes=None, record_box=None, o
     return tally
 
 
+def pct1(share):
+    """A share (0..1) as a percentage with one decimal, rounded half up: 64/66 -> 97.0%."""
+    tenths = (2000 * share + 1) // 2      # round(1000 * share) half up
+    return "%d.%d%%" % (tenths // 10, tenths % 10)
+
+
 def summarize(tally):
     """Shares per kind and pooled positives, plus the rule verdict."""
     def share(counts):
@@ -146,7 +152,7 @@ def _main(argv, environ, compare=None, read=None, make=None):
     result = summarize(tally)
     for kind in KINDS + ("positive",):
         r = result[kind]
-        print(kind, "runs=%d" % r["runs"], *("%s=%s" % (s, "n/a" if r[s] is None else "%.0f%%" % (100 * r[s]))
+        print(kind, "runs=%d" % r["runs"], *("%s=%s" % (s, "n/a" if r[s] is None else pct1(r[s]))
                                               for s in STATUSES))
     print("RULE TOO STRICT (positive MATCH < 90%)" if result["rule_too_strict"] else "positive control ok")
     false_match = tally["different"]["MATCH"]
