@@ -284,13 +284,13 @@ two code kinds to `DATA_DIR/codes.log` (default `/data/codes.log`):
 `<YYYY-MM-DD UTC> check_codes v=2 a=<STATUS> n=<N> codes=<compact>` and
 `<YYYY-MM-DD UTC> verdict_feedback a=<MATCH|MISMATCH|NEEDS_REVIEW> diff=<color|size|logo|model|other>`.
 Date only, no time of day. A record is written only when its message is exactly one of these
-formats (`check_codes` is also parsed with the recompute parser, so a forged line is dropped);
+formats (`check_codes` v=1 and v=2 are both accepted and also parsed with the recompute parser, so a forged line is dropped);
 every other record (`vision_call`, `check_done`, free text, an id) is dropped.
 
 - File: created 0600, appended with `O_APPEND`, one line per record. A write failure logs
   `codes_log_error code=WRITE` (once until a write succeeds again) and never breaks the bot.
 - Retention: at startup and once per UTC day (the polling loop's tick) the file is rewritten
-  atomically (temp, fsync, replace, 0600) keeping lines dated within the last 90 days, at most
+  atomically (temp, fsync, replace, 0600; an existing file with another mode is chmod-ed to 0600 at startup) keeping lines dated within the last 90 days, at most
   5 MiB (oldest lines dropped first). A failed rotation logs `codes_log_error code=ROTATE` and
   is retried after an hour. One process writes it (as the spend cap).
 - Privacy: no user, chat, file or marker id and no model text, so the file has no link to a

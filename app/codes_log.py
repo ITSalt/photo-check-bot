@@ -23,6 +23,7 @@ import datetime as _dt
 import logging
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -36,11 +37,11 @@ RETRY_S = 3600
 
 log = logging.getLogger("codes_log")
 
-_CHECK = re.compile(r"check_codes v=([12]) a=(?:MATCH|MISMATCH|NEEDS_REVIEW) n=(\d{1,2}) "
+_CHECK = re.compile(r"check_codes v=([12]) a=(?:MATCH|MISMATCH|NEEDS_REVIEW) n=([0-9]{1,2}) "
                     r"codes=([0-9A-Za-z,;]{1,160})")
 _FEEDBACK = re.compile(r"verdict_feedback a=(?:MATCH|MISMATCH|NEEDS_REVIEW) "
                        r"diff=(?:color|size|logo|model|other)")
-_STORED = re.compile(r"(\d{4}-\d{2}-\d{2}) ")
+_STORED = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}) ")
 
 
 def valid(message):
@@ -77,6 +78,9 @@ class CodesLogHandler(logging.Handler):
     def emit(self, record):
         try:
             message = record.getMessage()
+        except Exception:
+            return                  # a record with bad format args: not ours, not a write failure
+        try:
             if not valid(message):
                 return
             line = ("%s %s\n" % (self._today().isoformat(), message)).encode("ascii")
@@ -167,8 +171,13 @@ class CodesLogHandler(logging.Handler):
             pass
 
     def startup(self):
-        """At process start: drop stale temp files, then rotate. Never raises."""
+        """At process start: tighten the file mode to 0600, drop stale temp files, then rotate. Never raises."""
         self._rotated_on, self._retry_at = None, 0.0
+        try:
+            if os.path.exists(self.path) and stat.S_IMODE(os.stat(self.path).st_mode) != 0o600:
+                os.chmod(self.path, 0o600)
+        except OSError:
+            pass
         folder = os.path.dirname(self.path) or "."
         try:
             for name in os.listdir(folder):

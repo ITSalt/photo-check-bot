@@ -121,6 +121,44 @@ class WriteTests(Base):
         errors.extend(logs.output)
         self.assertEqual(errors, ["ERROR:codes_log:codes_log_error code=WRITE"])
 
+    def test_write_flag_rearms_after_a_success(self):
+        os.mkdir(self.path)
+        with self.assertLogs("codes_log", "ERROR") as logs:
+            self.logger.info(CHECK)
+            self.logger.info(CHECK)                      # still failing: no second line
+            os.rmdir(self.path)
+            self.logger.info(CHECK)                      # success re-arms
+            os.remove(self.path)
+            os.mkdir(self.path)
+            self.logger.info(CHECK)                      # fails again
+        self.assertEqual(logs.output, ["ERROR:codes_log:codes_log_error code=WRITE"] * 2)
+
+    def test_non_ascii_digits_are_dropped(self):
+        for forged in ("check_codes v=2 a=MATCH n=\u0662 codes=1MDD011C,2MDD011C;n",
+                       "check_codes v=\u0662 a=MATCH n=2 codes=1MDD011C,2MDD011C;n"):
+            with self.assertNoLogs("codes_log"):
+                self.logger.info("%s", forged)
+        self.assertFalse(os.path.exists(self.path))
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("\u0662026-10-10 %s\n" % CHECK_OK)
+        self.handler.startup()
+        self.assertEqual(self.read(), "")
+
+    def test_bad_format_args_are_skipped_silently(self):
+        with self.assertNoLogs("codes_log"):
+            self.logger.info("check_codes %s %s", "only-one")          # getMessage raises
+            self.logger.info("verdict_feedback %d", "x")
+        self.assertFalse(os.path.exists(self.path))
+        self.assertFalse(self.handler._write_failed)
+        self.logger.info(CHECK)                                          # still works afterwards
+        self.assertEqual(len(self.read().splitlines()), 1)
+
+    def test_startup_tightens_an_existing_loose_file(self):
+        self.write(self.stored(1))
+        os.chmod(self.path, 0o666)
+        self.handler.startup()
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
+
     def test_write_failure_does_not_break_a_check(self):
         os.mkdir(self.path)
         root = logging.getLogger()
