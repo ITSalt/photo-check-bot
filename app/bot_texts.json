@@ -7,8 +7,8 @@
     "fallback": "Проверка фото пока в разработке. Напишите /start.",
     "welcome_checks": "Привет! Я проверяю ИИ-фото товара перед публикацией на маркетплейсе.\nПришлите сгенерированное фото товара и фото настоящей вещи, а я скажу, совпадают ли проверенные детали и что посмотреть самому.\n\nПервые 3 проверки бесплатны. Проверка, в которой бот не уверен, не списывается.",
     "privacy": "Конфиденциальность: для проверки фото отправляются в OpenRouter (модель google/gemini-3.6-flash) с запретом на сбор данных. Бот удаляет фото, когда проверка заканчивается; хранение у провайдера регулируется его условиями. Бот хранит число ваших проверок под обезличенным ключом 90 дней. Ещё бот помнит ваш Telegram ID и откуда вы пришли — для списка ожидания платных проверок. /forget удаляет всё о вас.",
-    "ask_generated": "Пришлите сгенерированное фото товара. Фото уйдут на проверку в OpenRouter, подробнее: /privacy",
-    "ask_real": "Теперь пришлите фото настоящей вещи. Фото уйдут на проверку в OpenRouter, подробнее: /privacy",
+    "ask_generated": "Шаг 1 из 2: пришлите сгенерированное фото товара. Фото уйдут на проверку в OpenRouter, подробнее: /privacy",
+    "ask_real": "Шаг 1 из 2: фото получено. Шаг 2 из 2: пришлите фото настоящей вещи. Фото уйдут на проверку в OpenRouter, подробнее: /privacy",
     "expired": "Время ожидания пары истекло. Пришлите фотографии заново.",
     "cancelled": "Проверка отменена.",
     "unsupported": "Пришлите фотографию или файл изображения.",
@@ -23,7 +23,10 @@
     "free_used_up": "Бесплатные проверки закончились: 3 из 3. Платные проверки скоро появятся, вы в списке ожидания. Фото удалены, проверка не выполнялась.",
     "uncharged_limit": "Сегодня лимит неуверенных проверок исчерпан — попробуйте завтра (UTC). Фото удалены, проверка не выполнялась.",
     "forget_done": "Готово: бот удалил всё, что хранил о вас. Если снова напишете /start, вы снова попадёте в список ожидания.",
-    "forget_failed": "Не удалось удалить ваши данные. Попробуйте позже."
+    "forget_failed": "Не удалось удалить ваши данные. Попробуйте позже.",
+    "ask_generated_after_real": "Шаг 1 из 2: фото получено. Шаг 2 из 2: пришлите сгенерированное фото товара. Фото уйдут на проверку в OpenRouter, подробнее: /privacy",
+    "reminder_real": "Напоминание: для проверки не хватает фото настоящей вещи (шаг 2 из 2). Первое фото хранится ещё около {minutes} мин, потом начнём заново.",
+    "reminder_generated": "Напоминание: для проверки не хватает сгенерированного фото товара (шаг 2 из 2). Первое фото хранится ещё около {minutes} мин, потом начнём заново."
   },
   "en": {
     "name": "LookTwin · Photo check",
@@ -33,8 +36,8 @@
     "fallback": "Photo checks are still in development. Send /start.",
     "welcome_checks": "Hi! I check AI product photos before they go live on a marketplace.\nSend a generated product photo and a photo of the real item, and I'll tell you whether the checked details match and what to look at yourself.\n\nThe first 3 checks are free. A check the bot is not sure about is not counted.",
     "privacy": "Privacy: for the check, photos are sent to OpenRouter (model google/gemini-3.6-flash) with data collection denied. The bot deletes the photos when the check ends; the provider's retention is governed by its terms. The bot keeps the number of your checks under an anonymised key for 90 days. It also keeps your Telegram ID and where you came from, for the paid-checks waitlist. /forget deletes everything about you.",
-    "ask_generated": "Send the generated product photo. The photos go to OpenRouter for the check, details: /privacy",
-    "ask_real": "Now send a photo of the real item. The photos go to OpenRouter for the check, details: /privacy",
+    "ask_generated": "Step 1 of 2: send the generated product photo. The photos go to OpenRouter for the check, details: /privacy",
+    "ask_real": "Step 1 of 2: photo received. Step 2 of 2: send a photo of the real item. The photos go to OpenRouter for the check, details: /privacy",
     "expired": "The pair timed out. Send the photos again.",
     "cancelled": "Check cancelled.",
     "unsupported": "Send a photo or an image file.",
@@ -49,6 +52,9 @@
     "free_used_up": "Your free checks are used up: 3 of 3. Paid checks are coming soon, you are on the waitlist. The photos were deleted, no check was run.",
     "uncharged_limit": "Today's limit of unsure checks is used up. Try again tomorrow (UTC). The photos were deleted, no check was run.",
     "forget_done": "Done: the bot deleted everything it kept about you. If you send /start again, you will be on the waitlist again.",
-    "forget_failed": "Could not delete your data. Try again later."
+    "forget_failed": "Could not delete your data. Try again later.",
+    "ask_generated_after_real": "Step 1 of 2: photo received. Step 2 of 2: send the generated product photo. The photos go to OpenRouter for the check, details: /privacy",
+    "reminder_real": "Reminder: the check still needs a photo of the real item (step 2 of 2). The first photo is kept for about {minutes} more min, then we start over.",
+    "reminder_generated": "Reminder: the check still needs the generated product photo (step 2 of 2). The first photo is kept for about {minutes} more min, then we start over."
   }
 }

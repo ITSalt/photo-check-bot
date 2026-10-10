@@ -9,6 +9,9 @@ compare -> the counter is charged only on MATCH or MISMATCH; the reservation is
 closed in a finally. A refusal downloads nothing and makes no provider call.
 """
 import json
+import logging
+import math
+import os
 import pathlib
 import time
 
@@ -17,14 +20,30 @@ from app.intake.download import TooLarge
 from app.photo_compare import run_bot_pair
 from app.verdict_notes import format_notes
 
+log = logging.getLogger('photo_checks')
 TEXTS = json.loads((pathlib.Path(__file__).parent / "bot_texts.json").read_text(encoding="utf-8"))
 KEYS = ('ask_generated', 'ask_real', 'expired', 'cancelled', 'unsupported', 'busy',
         'MATCH', 'MISMATCH', 'NEEDS_REVIEW', 'UNAVAILABLE', 'limit_reached', 'free_used_up', 'uncharged_limit',
-        'welcome_checks', 'privacy', 'image_too_large', 'image_unreadable')
+        'welcome_checks', 'privacy', 'image_too_large', 'image_unreadable',
+        'ask_generated_after_real', 'reminder_real', 'reminder_generated')
 # Reasons a compare result may carry with UNAVAILABLE (app/vision_compare.py IMAGE_REASONS).
 IMAGE_REASONS = ('image_too_large', 'image_unreadable')
 MESSAGES = {key: TEXTS['ru'][key] for key in KEYS}
 PRIVACY_COMMANDS = ('help', 'privacy')
+REMINDER_ENV = 'PAIR_REMINDER_MIN'
+REMINDER_DEFAULT_MIN = 5
+REMINDER_MAX_MIN = 25
+
+
+def reminder_from_env(environ):
+    """Seconds before the one reminder (env PAIR_REMINDER_MIN, 1..25 minutes, default 5)."""
+    raw = str(environ.get(REMINDER_ENV) or '').strip()
+    if not raw:
+        return REMINDER_DEFAULT_MIN * 60
+    if raw.isascii() and raw.isdigit() and 1 <= int(raw) <= REMINDER_MAX_MIN:
+        return int(raw) * 60
+    log.warning('pair_reminder_config code=INVALID_MINUTES')
+    return REMINDER_DEFAULT_MIN * 60
 
 
 def messages(lang):
@@ -41,7 +60,7 @@ class PhotoChecks:
     gate (optional) admits a check (free-check counter, spend cap) and settles it.
     """
     def __init__(self, session_factory, compare, logger=None, *, clock=time.monotonic, max_pending=1024,
-                 gate=None):
+                 gate=None, reminder_s=None):
         if not callable(session_factory) or not callable(compare):
             raise ValueError('INVALID_PHOTO_DEPENDENCY')
         if type(max_pending) is not int or max_pending < 1:
@@ -50,6 +69,9 @@ class PhotoChecks:
         self.clock, self.max_pending = clock, max_pending
         self.gate = gate
         self.pending = {}
+        # In memory only: per half pair the age it was reminded at and the reply language.
+        self.reminders = {}
+        self.reminder_s = reminder_from_env(os.environ) if reminder_s is None else reminder_s
 
     def forget(self, user_id):
         """/forget: drop the user's half pair (file ids in memory) and their counter row.
@@ -57,13 +79,37 @@ class PhotoChecks:
         Raises when the counter row could not be deleted (the caller says so).
         """
         self.pending = {k: state for k, state in self.pending.items() if k[1] != user_id}
+        self.reminders = {k: v for k, v in self.reminders.items() if k[1] != user_id}
         if self.gate is not None:
             self.gate.forget(user_id)
 
-    def tick(self):
-        """Periodic housekeeping from the polling loop (the counter's daily purge)."""
+    def tick(self, send=None):
+        """Periodic housekeeping from the polling loop (the counter's daily purge).
+
+        With send(chat_id, text) it also sends one reminder per half pair that is older
+        than reminder_s and not yet expired. Pairs live in memory: a restart loses reminders.
+        """
         if self.gate is not None:
             self.gate.tick()
+        if send is None:
+            return
+        now = self.clock()
+        self.reminders = {k: v for k, v in self.reminders.items() if k in self.pending}
+        for key, state in list(self.pending.items()):
+            age = now - state['updated']
+            if age < self.reminder_s or age >= pairing.EXPIRY_S:
+                continue
+            if self.reminders.get(key, {}).get('updated') == state['updated']:
+                continue
+            lang = self.reminders.get(key, {}).get('lang', 'ru')
+            self.reminders[key] = {'updated': state['updated'], 'lang': lang, 'sent': True}
+            missing = 'reminder_real' if state['stage'] == 'have_generated' else 'reminder_generated'
+            minutes = max(1, math.ceil((pairing.EXPIRY_S - age) / 60))
+            try:
+                send(key[0], messages(lang)[missing].format(minutes=minutes))
+                log.info('pair_reminder sent')
+            except Exception:
+                log.warning('pair_reminder_error code=SEND')
 
     def handle(self, event, lang='ru'):
         user, chat = event.get('user_id'), event.get('chat_id')
@@ -85,11 +131,17 @@ class PhotoChecks:
             if len(self.pending) >= self.max_pending:
                 return [text['busy']]
             self.pending[key] = state
+            self.reminders[key] = {**self.reminders.get(key, {}), 'lang': lang}
+        else:
+            self.reminders.pop(key, None)
         # The privacy line goes with the first prompt to upload, before any photo is sent.
         replies = [text['welcome_checks'], text['privacy']] if command == 'start' else []
         for action in actions:
             if 'say' in action:
-                replies.append(text[action['say']])
+                say = action['say']
+                if say == 'ask_generated' and state['stage'] == 'have_real':
+                    say = 'ask_generated_after_real'
+                replies.append(text[say])
             elif action.get('do') == 'check':
                 replies.append(self._check(user, action, text, lang))
         return replies

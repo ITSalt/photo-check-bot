@@ -543,7 +543,7 @@ class PrivacyAndOffTests(WiringBase):
                 fake = FakeCompare(self, {"status": "MATCH"})
                 checks = self.build(fake)
                 sent = self.run_updates(checks, update(lang=lang, photo="real-file-id-1", caption="real"))
-                self.assertEqual(sent, [TEXTS[lang]["ask_generated"]])
+                self.assertEqual(sent, [TEXTS[lang]["ask_generated_after_real"]])
                 self.assertIn("/privacy", sent[0])
                 self.assertIn("OpenRouter", sent[0])
                 self.assertEqual(fake.calls, [])

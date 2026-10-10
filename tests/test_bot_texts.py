@@ -16,6 +16,8 @@ LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1
           "uncharged_limit": 300,
           # image refused before any provider call (WP-BOT-12 4b)
           "image_too_large": 300, "image_unreadable": 300,
+          # two-step flow (WP-UX-01)
+          "ask_generated_after_real": 300, "reminder_real": 300, "reminder_generated": 300,
           # /forget replies (app/bot.py, WP-BOT-09)
           "forget_done": 300, "forget_failed": 300}
 REQUIRED = set(LIMITS) - {"short_description", "description"}
@@ -42,6 +44,16 @@ class BotTextsTest(unittest.TestCase):
                 self.assertNotRegex(value.lower(), r"https?://|www\.|javascript:|@\w{5,}bot\b",
                                     f"{lang}.{key}: no links or bot mentions")
             self.assertNotIn("\n", texts["name"] + texts["short_description"], f"{lang}: name and short description are one line")
+
+    def test_two_step_wording(self):
+        for lang, texts in self.t.items():
+            for key in ("ask_generated", "ask_real", "ask_generated_after_real"):
+                self.assertIn("1", texts[key], f"{lang}.{key}")
+                self.assertIn("/privacy", texts[key], f"{lang}.{key}")
+            for key in ("ask_real", "ask_generated_after_real", "reminder_real", "reminder_generated"):
+                self.assertIn("2", texts[key], f"{lang}.{key}")
+            for key in ("reminder_real", "reminder_generated"):
+                self.assertIn("{minutes}", texts[key], f"{lang}.{key}")
 
 
 if __name__ == "__main__":
