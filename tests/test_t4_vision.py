@@ -221,7 +221,7 @@ class CoreTests(unittest.TestCase):
     def test_inventory_bad(self):
         a = dict(INV[0])
         cases = [chat("nope"), {}, chat({"attributes": []}), chat({"attributes": "x"}), chat({"attributes": INV, "x": 1}),
-                 chat({"attributes": [a, a]}), chat({"attributes": [{**a, "reference_roi": [900, 100, 300, 400]}]}),
+                 chat({"attributes": [a, a]}), chat({"attributes": [{**a, "reference_roi": [1000, 100, 300, 400]}]}),
                  chat({"attributes": [{**a, "confidence": 1}]}), chat({"attributes": [{**a, "claim": ""}]}),
                  chat({"attributes": [{**INV[0], "attribute_id": "a%d" % i} for i in range(13)]}),
                  chat({"attributes": INV}, finish="length"), chat([1])]

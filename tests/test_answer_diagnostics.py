@@ -62,7 +62,7 @@ class InventoryRules(unittest.TestCase):
         self.check(wrap(lambda a: a[1].update(attribute_id=5)), "TEXT_LENGTH", "attributes[1].attribute_id")
         self.check(wrap(lambda a: a[1].update(reference_roi=[1, 2, 3])), "ROI_SHAPE",
                    "attributes[1].reference_roi")
-        self.check(wrap(lambda a: a[0].update(reference_roi=[900, 900, 300, 300])), "ROI_OUT_OF_FRAME",
+        self.check(wrap(lambda a: a[0].update(reference_roi=[1000, 900, 300, 300])), "ROI_OUT_OF_FRAME",
                    "attributes[0].reference_roi")
         self.check(wrap(lambda a: a[1].update(attribute_id=a[0]["attribute_id"])), "DUP_ATTR",
                    "attributes[1].attribute_id")

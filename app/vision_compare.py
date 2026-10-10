@@ -12,7 +12,7 @@ Smoke test: python -m app.vision_compare REFERENCE_FILE CANDIDATE_FILE
 import logging
 import re
 
-from app.answer_rules import line_fields
+from app.answer_rules import FIXES, line_fields
 from app.photo_compare import ProviderUnavailable
 from app.vision_request import (AnswerError, ImageRejected, build_inventory_request,
                                 data_url)
@@ -189,17 +189,37 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
             raise ProviderUnavailable(OVERRUN)   # no further call in this check
         return body
 
+    def report_fixes(stage, fixes):
+        """Log (and count) the repairs made to an accepted or rejected answer: codes and counts only."""
+        for rule, n in fixes:
+            if rule not in FIXES:
+                continue
+            if rule == "ROI_CLAMPED":
+                log.info("vision_answer_fixed stage=%s rule=%s n=%d", stage, rule, int(n))
+            else:
+                log.info("vision_answer_fixed stage=%s rule=%s", stage, rule)
+            if on_reject is not None:
+                try:
+                    on_reject(stage, "FIXED", rule)
+                except Exception:
+                    pass
+        del fixes[:]
+
     def compare(reference, candidate):
         unavailable = {"status": "UNAVAILABLE"}
         stage = "inventory"
+        fixes = []
         try:
             data_url(candidate)  # reject a bad candidate before paying for call 1
-            validated = core.parse_inventory(ask(stage, build_inventory_request(reference, model)))
+            validated = core.parse_inventory(ask(stage, build_inventory_request(reference, model)), fixes)
+            report_fixes(stage, fixes)
             first, second = core.build_compare_requests(validated, reference, candidate, model)
             stage = "compare_a"
-            answer_first = core.parse_compare(ask(stage, first), validated)
+            answer_first = core.parse_compare(ask(stage, first), validated, fixes)
+            report_fixes(stage, fixes)
             stage = "compare_b"
-            answer_second = core.parse_compare(ask(stage, second), validated)
+            answer_second = core.parse_compare(ask(stage, second), validated, fixes)
+            report_fixes(stage, fixes)
             stage = "assess"
             return core.assess(validated, answer_first, answer_second)
         except ImageRejected as exc:
@@ -212,6 +232,7 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
             log.warning("vision_unavailable stage=%s code=%s", stage,
                         code if _CODE_RE.match(code) else "UNKNOWN")
         except AnswerError as exc:
+            report_fixes(stage, fixes)
             log.warning("vision_bad_answer stage=%s code=%s%s", stage, exc.args[0], line_fields(exc))
             rule = getattr(exc, "rule", None)
             if rule is not None and on_reject is not None:

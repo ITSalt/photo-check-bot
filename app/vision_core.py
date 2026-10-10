@@ -45,8 +45,15 @@ COMPARE_INSTRUCTION = (
     '"results": [{"attribute_id", "verdict", "evidence_quality", "reference_roi", '
     '"candidate_roi", "observation"}], "unmapped_candidate_elements": '
     '[{"candidate_roi", "description", "visibility_in_reference"}]}. '
-    "Exactly one result per inventory attribute, no others, no extra fields."
+    "Exactly one result per inventory attribute, no others, no extra fields. "
+    "Every box must lie inside 0..1000 (x+w<=1000, y+h<=1000), and nothing may follow the "
+    "JSON object."
 )
+
+
+def _note(fixes, rule, n):
+    if fixes is not None and n:
+        fixes.append((rule, n))
 
 
 def _reject(code, rule, path=None, **detail):
@@ -61,9 +68,43 @@ def _from_contract(code, error):
     return _reject(code, rule, path, **detail)
 
 
-def parse_inventory(body):
-    """Provider body of the inventory call -> T2 validate_inventory result."""
-    answer = extract_answer(body)
+def clamp_roi(roi):
+    """A box past the frame edge (x+w > 1000 or y+h > 1000) -> the clamped box, else None.
+
+    Only a well-formed box with x, y in [0, 999] and w, h >= 1 is touched; everything else
+    (and a clamped area < 100) is left for T2 to reject as before."""
+    if not (isinstance(roi, list) and len(roi) == 4
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in roi)):
+        return None
+    x, y, w, h = roi
+    if not (0 <= x < 1000 and 0 <= y < 1000 and w >= 1 and h >= 1):
+        return None
+    if x + w <= 1000 and y + h <= 1000:
+        return None
+    return [x, y, min(w, 1000 - x), min(h, 1000 - y)]
+
+
+def _clamp_in(item, keys):
+    """Clamp item[key] for each key when item is a dict; returns how many boxes changed."""
+    n = 0
+    if isinstance(item, dict):
+        for key in keys:
+            fixed = clamp_roi(item.get(key))
+            if fixed is not None:
+                item[key] = fixed
+                n += 1
+    return n
+
+
+def _clamp_list(items, keys):
+    return sum(_clamp_in(item, keys) for item in items) if isinstance(items, list) else 0
+
+
+def parse_inventory(body, fixes=None):
+    """Provider body of the inventory call -> T2 validate_inventory result.
+
+    `fixes` (optional list) receives (rule, count) for every repair made before validation."""
+    answer = extract_answer(body, fixes)
     attributes = answer.get("attributes")
     if set(answer) != {"attributes"}:
         raise _reject("BAD_INVENTORY", "WRAPPER_KEYS")
@@ -71,6 +112,7 @@ def parse_inventory(body):
         raise _reject("BAD_INVENTORY", "NO_ATTRIBUTES", "attributes")
     if len(attributes) > MAX_ATTRIBUTES:
         raise _reject("BAD_INVENTORY", "TOO_MANY_ATTRIBUTES", "attributes")
+    _note(fixes, "ROI_CLAMPED", _clamp_list(attributes, ("reference_roi",)))
     inventory = {"schema_version": "photo-inventory/1", "reference_photo_id": REF_ID,
                  "attributes": attributes}
     try:
@@ -98,9 +140,12 @@ def build_compare_requests(validated, reference_bytes, candidate_bytes, model,
     return requests
 
 
-def parse_compare(body, validated):
+def parse_compare(body, validated, fixes=None):
     """Provider body of one compare call -> T2-validated photo-compare/2 response."""
-    answer = extract_answer(body)
+    answer = extract_answer(body, fixes)
+    _note(fixes, "ROI_CLAMPED",
+          _clamp_list(answer.get("results"), ("reference_roi", "candidate_roi"))
+          + _clamp_list(answer.get("unmapped_candidate_elements"), ("candidate_roi",)))
     try:
         return t2.validate_response(answer, validated["attribute_ids"],
                                     expected_inventory_sha256=validated["sha256"])

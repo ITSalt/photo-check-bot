@@ -37,6 +37,9 @@ RULES = {
     "OTHER": "no known template matched",
 }
 
+# Repairs applied to an answer that is then validated as usual (not rejects).
+FIXES = ("ROI_CLAMPED", "TRAILING_TAIL")
+
 # Field names of our contract: the only identifiers a path or a missing list may carry.
 _FIELDS = frozenset({
     "attributes", "results", "unmapped_candidate_elements", "attribute_id", "claim",
@@ -174,16 +177,23 @@ class RejectTally:
 
     def __init__(self):
         self.counts = {}
+        self.fixed = {}
 
     def add(self, stage, code, rule):
-        key = (stage if re.fullmatch(r"[a-z_]{1,20}", str(stage)) else "unknown",
-               rule if rule in RULES else "OTHER")
+        stage = stage if re.fullmatch(r"[a-z_]{1,20}", str(stage)) else "unknown"
+        if code == "FIXED":   # a repaired answer, counted once per call
+            key = (stage, rule if rule in FIXES else "OTHER")
+            self.fixed[key] = self.fixed.get(key, 0) + 1
+            return
+        key = (stage, rule if rule in RULES else "OTHER")
         self.counts[key] = self.counts.get(key, 0) + 1
 
     def lines(self):
-        if not self.counts:
-            return ["rejects by stage x rule: none"]
-        out = ["rejects by stage x rule:"]
+        out = ["rejects by stage x rule:" if self.counts else "rejects by stage x rule: none"]
         for (stage, rule), n in sorted(self.counts.items()):
             out.append("  stage=%s rule=%s n=%d" % (stage, rule, n))
+        if self.fixed:
+            out.append("repaired answers by stage x rule:")
+            for (stage, rule), n in sorted(self.fixed.items()):
+                out.append("  stage=%s rule=%s n=%d" % (stage, rule, n))
         return out

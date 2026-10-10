@@ -232,6 +232,13 @@ behaviour (UNAVAILABLE, not charged) and the T2 contract are unchanged.
 lines (fixed codes and counts, no paths, no model text); under `--gate` the table comes before
 the PASS/FAIL line.
 
+Repairs before validation (D-20), logged as `vision_answer_fixed stage=<stage> rule=<RULE> [n=<count>]` (codes and counts only):
+
+- `ROI_CLAMPED`: a box with x+w > 1000 or y+h > 1000 (x, y in [0, 999], w, h >= 1) gets w = min(w, 1000-x), h = min(h, 1000-y) in `app/vision_core.py` before T2 validation (inventory `reference_roi`; compare `reference_roi`, `candidate_roi`, unmapped `candidate_roi`). x or y outside the frame, or an area < 100 after clamping, is rejected by T2 as before. The clamped inventory is what is hashed and sent to the compare calls. A clamped reference box is smaller, so it may cross `FINE_ROI_AREA`: that only changes the reason label of an attribute already under review (`fine_detail_unverified`), never the status.
+- `TRAILING_TAIL`: `extract_answer` parses the first complete JSON object; a tail made only of whitespace and `}` `]` backtick is accepted. Any other tail stays `NOT_JSON`.
+
+The controls table also prints `repaired answers by stage x rule:` with these two counts (once per call).
+
 | Rule | Meaning |
 |------|---------|
 | `WRAPPER_KEYS` | inventory answer keys are not exactly {attributes} |
