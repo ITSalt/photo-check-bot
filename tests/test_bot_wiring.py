@@ -287,6 +287,79 @@ class FreeCounterTests(WiringBase):
                 self.bot.main(photo_checks=checks)
         tick.assert_called_once()
 
+    def test_main_attaches_codes_log_rotates_and_detaches(self):
+        from app import codes_log
+        path = os.path.join(self.data_dir, codes_log.FILE_NAME)
+        os.makedirs(self.data_dir, exist_ok=True)
+        stale = "2026-01-01 check_codes v=2 a=MATCH n=2 codes=1MDD011C,2MDD011C;n\n"
+        pathlib.Path(path).write_text(stale, encoding="ascii")
+        seen = []
+        def call(method, params=None, timeout=None):
+            handlers = [h for h in logging.getLogger().handlers if isinstance(h, codes_log.CodesLogHandler)]
+            seen.append(len(handlers))
+            raise KeyboardInterrupt()
+        with patch.object(self.bot, "call", side_effect=call), patch.object(self.bot.logging, "basicConfig"), \
+                patch.dict(os.environ, {"DATA_DIR": self.data_dir}):
+            with self.assertRaises(KeyboardInterrupt):
+                self.bot.main(photo_checks=None)
+        self.assertEqual(seen, [1])
+        self.assertEqual(pathlib.Path(path).read_text(encoding="ascii"), "")      # startup rotation
+        self.assertEqual([h for h in logging.getLogger().handlers if isinstance(h, codes_log.CodesLogHandler)], [])
+
+    def _run_main_with_handler(self, handler, calls, **extra):
+        from app import codes_log
+        replies = iter(calls)
+        def call(method, params=None, timeout=None):
+            value = next(replies)
+            if callable(value):
+                value = value()
+            if isinstance(value, BaseException):
+                raise value
+            return value
+        with patch.object(self.bot, "call", side_effect=call), patch.object(self.bot.logging, "basicConfig"), \
+                patch.object(self.bot.waitlist, "startup"), patch.object(self.bot.waitlist, "maybe_purge"), \
+                patch.object(codes_log, "attach", return_value=handler):
+            with self.assertRaises(KeyboardInterrupt):
+                self.bot.main(photo_checks=None)
+
+    def test_main_loop_rotates_codes_log_on_each_tick_across_a_day(self):
+        from app import codes_log
+        now = [1_791_590_400.0 + 43200]      # 2026-10-10 12:00 UTC
+        path = os.path.join(self.data_dir, codes_log.FILE_NAME)
+        os.makedirs(self.data_dir, exist_ok=True)
+        handler = codes_log.CodesLogHandler(path, clock=lambda: now[0])
+        line = "2026-07-13 check_codes v=2 a=MATCH n=2 codes=1MDD011C,2MDD011C;n\n"     # 89 days old
+        pathlib.Path(path).write_text(line, encoding="ascii")
+        seen = []
+        def second_day():
+            seen.append(pathlib.Path(path).read_text(encoding="ascii"))     # kept so far
+            now[0] += 2 * 86400                                              # now 91 days old
+            return []
+        self._run_main_with_handler(handler, [lambda: [], second_day, KeyboardInterrupt()])
+        self.assertEqual(seen, [line])
+        self.assertEqual(pathlib.Path(path).read_text(encoding="ascii"), "")
+
+    def test_main_calls_codes_log_startup_and_each_tick(self):
+        from app import codes_log
+        handler = codes_log.CodesLogHandler(os.path.join(self.data_dir, "codes.log"))
+        with patch.object(handler, "startup") as startup, patch.object(handler, "maybe_rotate") as tick:
+            self._run_main_with_handler(handler, [[], [], KeyboardInterrupt()])
+        startup.assert_called_once()
+        self.assertEqual(tick.call_count, 3)
+
+    def test_main_startup_removes_stale_temp_and_tightens_mode(self):
+        from app import codes_log
+        os.makedirs(self.data_dir, exist_ok=True)
+        path = os.path.join(self.data_dir, "codes.log")
+        stale = os.path.join(self.data_dir, ".codes.x.tmp")
+        pathlib.Path(stale).write_text("x")
+        pathlib.Path(path).write_text("")
+        os.chmod(path, 0o644)
+        handler = codes_log.CodesLogHandler(path)
+        self._run_main_with_handler(handler, [KeyboardInterrupt()])
+        self.assertFalse(os.path.exists(stale))
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
     def test_missing_or_short_salt_keeps_feature_off(self):
         for salt in (None, "", "s" * 31):
             with self.subTest(salt=salt):
@@ -526,10 +599,10 @@ class PrivacyAndOffTests(WiringBase):
 
     def test_privacy_line_texts(self):
         self.assertTrue(TEXTS["ru"]["privacy"].endswith(
-            "Бот хранит число ваших проверок под обезличенным ключом 90 дней. Ещё бот помнит ваш Telegram ID "
+            "Бот 90 дней хранит число ваших проверок под обезличенным ключом и обезличенные коды проверок без привязки к вам. Ещё бот помнит ваш Telegram ID "
             "и откуда вы пришли — для списка ожидания платных проверок. /forget удаляет всё о вас."))
         self.assertTrue(TEXTS["en"]["privacy"].endswith(
-            "The bot keeps the number of your checks under an anonymised key for 90 days. It also keeps your "
+            "For 90 days the bot keeps the number of your checks under an anonymised key and anonymised check codes not linked to you. It also keeps your "
             "Telegram ID and where you came from, for the paid-checks waitlist. /forget deletes everything about you."))
         for lang in ("ru", "en"):
             self.assertNotIn("только", TEXTS[lang]["privacy"])

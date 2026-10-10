@@ -11,6 +11,8 @@ migrated and purged at startup and purged once a UTC day from the polling loop.
 Reply language (app/lang.py): a /start payload token, else the user's explicit choice from the
 Русский / English buttons (/start, /lang), else the profile default (CIS languages -> ru). The
 choice is kept in memory only (CHOICES), bounded, cleared by /forget and lost on restart.
+
+DATA_DIR/codes.log (app/codes_log.py): check_codes and verdict_feedback lines only, no ids; kept 90 days.
 """
 import json
 import logging
@@ -21,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from app import lang, waitlist
+from app import codes_log, lang, waitlist
 from app.intake.parse import parse_update
 from app.photo_checks import Reply, parse_feedback_data
 
@@ -254,11 +256,21 @@ def handle(update, *, photo_checks=None):
 
 def main(*, photo_checks=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    codes = codes_log.attach()          # DATA_DIR/codes.log: check_codes / verdict_feedback lines only
+    try:
+        codes.startup()
+        _poll(photo_checks, codes)
+    finally:
+        codes_log.detach(codes)
+
+
+def _poll(photo_checks, codes):
     offset = None
     log.info("bot started")
     waitlist.startup()
     while True:
         waitlist.maybe_purge()
+        codes.maybe_rotate()
         try:
             params = {"timeout": POLL_TIMEOUT, "allowed_updates": json.dumps(ALLOWED_UPDATES)}
             if offset is not None:

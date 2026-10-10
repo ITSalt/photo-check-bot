@@ -276,6 +276,29 @@ decimal, rounded half up; never a line's content. A `check_codes_error` line is 
 counted separately; a class letter that contradicts its outcome/evidence/fine is counted and
 gives exit 1, like an unparsable line or a recorded A that differs.
 
+### Durable `codes.log` (WP-UX-05, D-9)
+
+A redeploy recreates the container and `docker logs` restarts, so `app/codes_log.py` (a
+`logging.Handler` attached in `app/bot.py`, nothing changed in `vision_compare.py`) appends the
+two code kinds to `DATA_DIR/codes.log` (default `/data/codes.log`):
+`<YYYY-MM-DD UTC> check_codes v=2 a=<STATUS> n=<N> codes=<compact>` and
+`<YYYY-MM-DD UTC> verdict_feedback a=<MATCH|MISMATCH|NEEDS_REVIEW> diff=<color|size|logo|model|other>`.
+Date only, no time of day. A record is written only when its message is exactly one of these
+formats (`check_codes` v=1 and v=2 are both accepted and also parsed with the recompute parser, so a forged line is dropped);
+every other record (`vision_call`, `check_done`, free text, an id) is dropped.
+
+- File: created 0600, appended with `O_APPEND`, one line per record. A write failure logs
+  `codes_log_error code=WRITE` (once until a write succeeds again) and never breaks the bot.
+- Retention: at startup and once per UTC day (the polling loop's tick) the file is rewritten
+  atomically (temp, fsync, replace, 0600; an existing file with another mode is chmod-ed to 0600 at startup) keeping lines dated within the last 90 days, at most
+  5 MiB (oldest lines dropped first). A failed rotation logs `codes_log_error code=ROTATE` and
+  is retried after an hour. One process writes it (as the spend cap).
+- Privacy: no user, chat, file or marker id and no model text, so the file has no link to a
+  user; `/forget` does not touch it. The bot's privacy text names it ("and anonymised check
+  codes not linked to you", ru and en).
+- Reading: `python3 -m app.recompute /data/codes.log` (the date prefix is fine: the recompute
+  finds `check_codes v=...` anywhere in a line).
+
 ### Format-reject diagnostics (WP-BOT-15)
 
 A format reject (`BAD_INVENTORY`, `BAD_COMPARE`) logs which rule failed:

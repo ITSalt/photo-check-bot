@@ -1,5 +1,7 @@
 """WP-UX-02: seller marks a verdict as wrong -> a difference code, codes only (fake clock, fakes only)."""
 import json
+import os
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -291,7 +293,9 @@ class BotTests(WiringBase):
         def call(method, params=None, timeout=None):
             seen.append((method, dict(params or {})))
             raise RuntimeError('stop')
-        with patch.object(self.bot, 'call', side_effect=call), patch.object(self.bot.waitlist, 'startup'), \
+        with tempfile.TemporaryDirectory() as data_dir, \
+                patch.dict(os.environ, {'DATA_DIR': data_dir}), \
+                patch.object(self.bot, 'call', side_effect=call), patch.object(self.bot.waitlist, 'startup'), \
                 patch.object(self.bot.waitlist, 'maybe_purge'), \
                 patch.object(self.bot.time, 'sleep', side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
