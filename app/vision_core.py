@@ -12,6 +12,7 @@ Importing this module needs `core_t2/` on the path (the Dockerfile ships it next
 """
 from core_t2 import photo_compare_t2_candidate as t2
 
+from app.answer_rules import classify
 from app.vision_request import (MAX_ATTRIBUTES, MAX_IMAGE_BYTES, AnswerError, chat_payload,
                                 data_url, extract_answer, image_part, text_part)
 
@@ -48,19 +49,34 @@ COMPARE_INSTRUCTION = (
 )
 
 
+def _reject(code, rule, path=None, **detail):
+    """AnswerError(code) that also carries a fixed rule code (never model text)."""
+    exc = AnswerError(code)
+    exc.rule, exc.path, exc.detail = rule, path, detail
+    return exc
+
+
+def _from_contract(code, error):
+    rule, path, detail = classify(error)
+    return _reject(code, rule, path, **detail)
+
+
 def parse_inventory(body):
     """Provider body of the inventory call -> T2 validate_inventory result."""
     answer = extract_answer(body)
     attributes = answer.get("attributes")
-    if (set(answer) != {"attributes"} or not isinstance(attributes, list)
-            or not 0 < len(attributes) <= MAX_ATTRIBUTES):
-        raise AnswerError("BAD_INVENTORY")
+    if set(answer) != {"attributes"}:
+        raise _reject("BAD_INVENTORY", "WRAPPER_KEYS")
+    if not isinstance(attributes, list) or not attributes:
+        raise _reject("BAD_INVENTORY", "NO_ATTRIBUTES", "attributes")
+    if len(attributes) > MAX_ATTRIBUTES:
+        raise _reject("BAD_INVENTORY", "TOO_MANY_ATTRIBUTES", "attributes")
     inventory = {"schema_version": "photo-inventory/1", "reference_photo_id": REF_ID,
                  "attributes": attributes}
     try:
         return t2.validate_inventory(inventory, expected_reference_photo_id=REF_ID)
-    except t2.ContractError:
-        raise AnswerError("BAD_INVENTORY") from None
+    except t2.ContractError as error:
+        raise _from_contract("BAD_INVENTORY", error) from None
 
 
 def build_compare_requests(validated, reference_bytes, candidate_bytes, model,
@@ -88,8 +104,8 @@ def parse_compare(body, validated):
     try:
         return t2.validate_response(answer, validated["attribute_ids"],
                                     expected_inventory_sha256=validated["sha256"])
-    except t2.ContractError:
-        raise AnswerError("BAD_COMPARE") from None
+    except t2.ContractError as error:
+        raise _from_contract("BAD_COMPARE", error) from None
 
 
 FINE_ROI_AREA = 20000  # permille^2: a reference box under 2% of the frame is a fine detail

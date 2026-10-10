@@ -12,6 +12,7 @@ Smoke test: python -m app.vision_compare REFERENCE_FILE CANDIDATE_FILE
 import logging
 import re
 
+from app.answer_rules import line_fields
 from app.photo_compare import ProviderUnavailable
 from app.vision_request import (AnswerError, ImageRejected, build_inventory_request,
                                 data_url)
@@ -137,7 +138,7 @@ def _report(on_call, cost):
 
 
 def make_compare(config, environ, call_provider, core, transport=None, on_call=None,
-                 on_begin=None, on_not_sent=None):
+                 on_begin=None, on_not_sent=None, on_reject=None):
     """compare(reference, candidate) -> the vision_core.assess dict, or {"status": "UNAVAILABLE"}.
 
     Never raises ProviderUnavailable: any provider failure (MISSING_KEY, TIMEOUT,
@@ -157,6 +158,9 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
     UNAVAILABLE (BEGIN). `on_not_sent()` replaces on_call(None) only when call_provider
     failed before the transport was invoked (e.g. MISSING_KEY): only then is it proven
     that nothing left. Any failure after the transport was entered counts the fallback.
+
+    `on_reject(stage, code, rule)` (optional, for the controls table) runs after a format
+    reject whose rule is known; it gets fixed codes only and cannot change the check.
     """
     if transport is None:
         transport = make_transport(config["base_url"], config["timeout"],
@@ -208,7 +212,13 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
             log.warning("vision_unavailable stage=%s code=%s", stage,
                         code if _CODE_RE.match(code) else "UNKNOWN")
         except AnswerError as exc:
-            log.warning("vision_bad_answer stage=%s code=%s", stage, exc.args[0])
+            log.warning("vision_bad_answer stage=%s code=%s%s", stage, exc.args[0], line_fields(exc))
+            rule = getattr(exc, "rule", None)
+            if rule is not None and on_reject is not None:
+                try:
+                    on_reject(stage, exc.args[0], rule)
+                except Exception:   # a counter must never change the check
+                    pass
         return unavailable
 
     return compare
@@ -231,7 +241,7 @@ def _default_core():
 
 
 def compare_from_env(environ, *, transport=None, core=None, on_call=None, on_begin=None,
-                     on_not_sent=None):
+                     on_not_sent=None, on_reject=None):
     """The compare callable, or None (not configured, or T3b / the T2 core unavailable).
 
     Every provider call goes through core_t3's call_provider; it is not injectable,
@@ -249,7 +259,7 @@ def compare_from_env(environ, *, transport=None, core=None, on_call=None, on_beg
         log.warning("vision disabled, T2 core unavailable")
         return None
     return make_compare(config, environ, call_provider, core, transport, on_call,
-                        on_begin, on_not_sent)
+                        on_begin, on_not_sent, on_reject)
 
 
 def _main(argv, environ):
