@@ -21,6 +21,8 @@ LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1
           # wrong-verdict feedback (WP-UX-02)
           "feedback_button": 64, "feedback_ask": 200, "feedback_thanks": 300, "feedback_refused": 200,
           "code_color": 32, "code_size": 32, "code_logo": 32, "code_model": 32, "code_other": 32,
+          # reply language choice (WP-UX-03)
+          "lang_prompt": 120, "lang_set": 60,
           # /forget replies (app/bot.py, WP-BOT-09)
           "forget_done": 300, "forget_failed": 300}
 REQUIRED = set(LIMITS) - {"short_description", "description"}

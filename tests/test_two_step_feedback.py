@@ -3,6 +3,7 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
+from app import lang
 from app.photo_checks import FEEDBACK_CODES, PhotoChecks, Reply, TEXTS, parse_feedback_data
 from tests.test_bot_wiring import FakeCompare, WiringBase, update
 
@@ -301,7 +302,9 @@ class BotTests(WiringBase):
 
     def test_plain_messages_unchanged(self):
         calls = self.run_all(None, update(BOT_USER, 'ru', text='/start'))
-        self.assertEqual(calls, [('sendMessage', {'chat_id': BOT_USER, 'text': TEXTS['ru']['welcome']})])
+        # Same text as before; the only addition is the Русский / English keyboard (WP-UX-03).
+        self.assertEqual(calls, [('sendMessage', {'chat_id': BOT_USER, 'text': TEXTS['ru']['welcome'],
+                                                  'reply_markup': json.dumps(lang.keyboard())})])
 
 
 class ParseUpdateUntouched(unittest.TestCase):
