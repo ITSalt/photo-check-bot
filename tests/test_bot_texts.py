@@ -50,6 +50,13 @@ class BotTextsTest(unittest.TestCase):
                                     f"{lang}.{key}: no links or bot mentions")
             self.assertNotIn("\n", texts["name"] + texts["short_description"], f"{lang}: name and short description are one line")
 
+    def test_privacy_names_anonymised_check_codes(self):
+        # WP-UX-05, D-9: the durable codes.log is disclosed in the privacy line
+        self.assertIn("и обезличенные коды проверок без привязки к вам", self.t["ru"]["privacy"])
+        self.assertIn("and anonymised check codes not linked to you", self.t["en"]["privacy"])
+        for lang in ("ru", "en"):
+            self.assertIn("90", self.t[lang]["privacy"])
+
     def test_two_step_wording(self):
         for lang, texts in self.t.items():
             for key in ("ask_generated", "ask_real", "ask_generated_after_real"):

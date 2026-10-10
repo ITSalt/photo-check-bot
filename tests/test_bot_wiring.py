@@ -287,6 +287,25 @@ class FreeCounterTests(WiringBase):
                 self.bot.main(photo_checks=checks)
         tick.assert_called_once()
 
+    def test_main_attaches_codes_log_rotates_and_detaches(self):
+        from app import codes_log
+        path = os.path.join(self.data_dir, codes_log.FILE_NAME)
+        os.makedirs(self.data_dir, exist_ok=True)
+        stale = "2026-01-01 check_codes v=2 a=MATCH n=2 codes=1MDD011C,2MDD011C;n\n"
+        pathlib.Path(path).write_text(stale, encoding="ascii")
+        seen = []
+        def call(method, params=None, timeout=None):
+            handlers = [h for h in logging.getLogger().handlers if isinstance(h, codes_log.CodesLogHandler)]
+            seen.append(len(handlers))
+            raise KeyboardInterrupt()
+        with patch.object(self.bot, "call", side_effect=call), patch.object(self.bot.logging, "basicConfig"), \
+                patch.dict(os.environ, {"DATA_DIR": self.data_dir}):
+            with self.assertRaises(KeyboardInterrupt):
+                self.bot.main(photo_checks=None)
+        self.assertEqual(seen, [1])
+        self.assertEqual(pathlib.Path(path).read_text(encoding="ascii"), "")      # startup rotation
+        self.assertEqual([h for h in logging.getLogger().handlers if isinstance(h, codes_log.CodesLogHandler)], [])
+
     def test_missing_or_short_salt_keeps_feature_off(self):
         for salt in (None, "", "s" * 31):
             with self.subTest(salt=salt):
@@ -526,10 +545,10 @@ class PrivacyAndOffTests(WiringBase):
 
     def test_privacy_line_texts(self):
         self.assertTrue(TEXTS["ru"]["privacy"].endswith(
-            "Бот хранит число ваших проверок под обезличенным ключом 90 дней. Ещё бот помнит ваш Telegram ID "
+            "Бот 90 дней хранит число ваших проверок под обезличенным ключом и обезличенные коды проверок без привязки к вам. Ещё бот помнит ваш Telegram ID "
             "и откуда вы пришли — для списка ожидания платных проверок. /forget удаляет всё о вас."))
         self.assertTrue(TEXTS["en"]["privacy"].endswith(
-            "The bot keeps the number of your checks under an anonymised key for 90 days. It also keeps your "
+            "For 90 days the bot keeps the number of your checks under an anonymised key and anonymised check codes not linked to you. It also keeps your "
             "Telegram ID and where you came from, for the paid-checks waitlist. /forget deletes everything about you."))
         for lang in ("ru", "en"):
             self.assertNotIn("только", TEXTS[lang]["privacy"])
