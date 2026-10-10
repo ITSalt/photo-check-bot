@@ -178,6 +178,46 @@ def expected_review_share(n, p, q=0.0):
     return 1 - (p ** n) * (1 - q)
 
 
+def _classify(validated, first, second):
+    """T2 aggregation plus the product-level class of every attribute, in inventory order.
+
+    Returns (rows, aggregate); a row is {"attribute_id", "label", "outcome", "evidence":
+    (first, second), "fine", "cls"} with cls in confirmed / differs / one of _REASON_ORDER.
+    """
+    try:
+        aggregate = t2.aggregate_responses(first, second)
+    except t2.ContractError:
+        raise AnswerError("BAD_AGGREGATE") from None
+    inventory = {a["attribute_id"]: a for a in validated["inventory"]["attributes"]}
+    left = {r["attribute_id"]: r for r in first["results"]}
+    right = {r["attribute_id"]: r for r in second["results"]}
+    escalated = aggregate["escalations"]
+    rows = []
+    for aid in validated["attribute_ids"]:
+        outcome = aggregate["attributes"][aid]
+        fine = is_fine(inventory[aid]["reference_roi"])
+        evidence = (left[aid]["evidence_quality"], right[aid]["evidence_quality"])
+        if outcome == "MATCH":
+            cls = "confirmed"
+        elif outcome == "MISMATCH":
+            cls = "differs"
+        elif outcome == "NOT_VISIBLE_IN_REFERENCE" or "NONE" in evidence:
+            cls = "not_visible"
+        elif aid in escalated and fine:
+            cls = "fine_detail_unverified"
+        elif outcome == "ASYMMETRIC_PASS":
+            cls = "orders_disagree"
+        else:
+            cls = "weak_evidence"
+        rows.append({"attribute_id": aid, "label": label_of(inventory[aid]["claim"]),
+                     "outcome": outcome, "evidence": evidence, "fine": fine, "cls": cls})
+    return rows, aggregate
+
+
+def _extra_of(aggregate):
+    return {"MISMATCH": "confirmed", "NEEDS_REVIEW": "unconfirmed"}.get(aggregate["coverage"], "none")
+
+
 def assess(validated, first, second):
     """Two T2-validated compare responses -> the check result (T2 aggregation, then labels).
 
@@ -190,35 +230,12 @@ def assess(validated, first, second):
     orders; MATCH only if everything is confirmed and neither order reported an extra;
     NEEDS_REVIEW otherwise. Crop escalation is not run, so it never rescues a verdict.
     """
-    try:
-        aggregate = t2.aggregate_responses(first, second)
-    except t2.ContractError:
-        raise AnswerError("BAD_AGGREGATE") from None
-    inventory = {a["attribute_id"]: a for a in validated["inventory"]["attributes"]}
-    left = {r["attribute_id"]: r for r in first["results"]}
-    right = {r["attribute_id"]: r for r in second["results"]}
-    escalated = aggregate["escalations"]
-    confirmed, to_check, differs = [], [], []
-    for aid in validated["attribute_ids"]:
-        outcome = aggregate["attributes"][aid]
-        name = label_of(inventory[aid]["claim"])
-        fine = is_fine(inventory[aid]["reference_roi"])
-        if outcome == "MATCH":
-            confirmed.append(aid)
-        elif outcome == "MISMATCH":
-            differs.append({"attribute_id": aid, "label": name})
-        else:
-            hidden = "NONE" in (left[aid]["evidence_quality"], right[aid]["evidence_quality"])
-            if outcome == "NOT_VISIBLE_IN_REFERENCE" or hidden:
-                reason = "not_visible"
-            elif aid in escalated and fine:
-                reason = "fine_detail_unverified"
-            elif outcome == "ASYMMETRIC_PASS":
-                reason = "orders_disagree"
-            else:
-                reason = "weak_evidence"
-            to_check.append({"attribute_id": aid, "label": name, "reason": reason})
-    extra = {"MISMATCH": "confirmed", "NEEDS_REVIEW": "unconfirmed"}.get(aggregate["coverage"], "none")
+    rows, aggregate = _classify(validated, first, second)
+    confirmed = [r["attribute_id"] for r in rows if r["cls"] == "confirmed"]
+    differs = [{"attribute_id": r["attribute_id"], "label": r["label"]} for r in rows if r["cls"] == "differs"]
+    to_check = [{"attribute_id": r["attribute_id"], "label": r["label"], "reason": r["cls"]}
+                for r in rows if r["cls"] in _REASON_ORDER]
+    extra = _extra_of(aggregate)
     if differs or extra == "confirmed":
         status = "MISMATCH"
     elif to_check or extra == "unconfirmed":
@@ -227,3 +244,55 @@ def assess(validated, first, second):
         status = "MATCH"
     return {"status": status, "total": len(validated["attribute_ids"]), "confirmed": confirmed,
             "to_check": to_check, "differs": differs, "extra": extra}
+
+
+# ---------------------------------------------------------------------------
+# Per-attribute codes (WP-CONTROLS-01, D-8, D-10): a compact record of one completed check.
+# Enum codes and small integers only: never a claim, label, observation, attribute_id,
+# roi value, id or hash. Format documented in docs/t4-vision.md.
+CODES_VERSION = 1
+CODES_MAX = 160                       # length cap of the compact string
+CODE_OUTCOME = {"MATCH": "M", "MISMATCH": "X", "NEEDS_REVIEW": "N", "ASYMMETRIC_PASS": "A",
+                "NOT_VISIBLE_IN_REFERENCE": "V"}
+CODE_EVIDENCE = {"DIRECT": "D", "PARTIAL": "P", "NONE": "N"}
+CODE_CLASS = {"confirmed": "C", "differs": "D", "not_visible": "V", "orders_disagree": "O",
+              "weak_evidence": "W", "fine_detail_unverified": "F"}
+CODE_EXTRA = {"none": "n", "unconfirmed": "u", "confirmed": "c"}
+RULE_C_ATTRIBUTES = 8                 # D-10: rule C looks at the first 8 inventory attributes
+
+
+def status_of(classes, extra):
+    """Rule A on class names and the extra outcome (the same rule `assess` applies)."""
+    if "differs" in classes or extra == "confirmed":
+        return "MISMATCH"
+    if any(c != "confirmed" for c in classes) or extra == "unconfirmed":
+        return "NEEDS_REVIEW"
+    return "MATCH"
+
+
+def code_record(validated, first, second):
+    """Two T2-validated compare responses -> the code record of the check.
+
+    {"a": status, "extra": "none"|"unconfirmed"|"confirmed", "attrs": [{"pos": 1.., "outcome",
+    "evidence": (e1, e2), "fine": bool, "cls"}]}. `a` equals assess(...)["status"].
+    """
+    rows, aggregate = _classify(validated, first, second)
+    extra = _extra_of(aggregate)
+    attrs = [{"pos": i, "outcome": r["outcome"], "evidence": r["evidence"], "fine": r["fine"],
+              "cls": r["cls"]} for i, r in enumerate(rows, 1)]
+    return {"a": status_of([r["cls"] for r in rows], extra), "extra": extra, "attrs": attrs}
+
+
+def format_codes(record):
+    """Compact string: `<pos><outcome><ev1><ev2><fine 0|1><class>` per attribute joined by
+    ',', then ';' and the extra code. Fixed alphabet [0-9A-Za-z,;], at most CODES_MAX chars."""
+    items = ["%d%s%s%s%d%s" % (a["pos"], CODE_OUTCOME[a["outcome"]], CODE_EVIDENCE[a["evidence"][0]],
+                               CODE_EVIDENCE[a["evidence"][1]], 1 if a["fine"] else 0, CODE_CLASS[a["cls"]])
+             for a in record["attrs"]]
+    return (",".join(items) + ";" + CODE_EXTRA[record["extra"]])[:CODES_MAX]
+
+
+def codes_line(record):
+    """`check_codes v=1 a=<A status> n=<attrs> codes=<compact>` (no ids, no text)."""
+    return "check_codes v=%d a=%s n=%d codes=%s" % (CODES_VERSION, record["a"], len(record["attrs"]),
+                                                    format_codes(record))
