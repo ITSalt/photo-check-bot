@@ -10,6 +10,8 @@ the product-level status (see docs/t4-vision.md).
 Importing this module needs `core_t2/` on the path (the Dockerfile ships it next to
 `app/`); vision_compare treats an ImportError as "feature off".
 """
+import re
+
 from core_t2 import photo_compare_t2_candidate as t2
 
 from app.answer_rules import classify
@@ -165,6 +167,62 @@ def label_of(claim):
     return " ".join(name.split())[:MAX_LABEL] or "деталь"
 
 
+# ---------------------------------------------------------------------------
+# Text / logo / count flag (WP-CONTROLS-02, D-2 option (a), D-5): a runtime keyword heuristic
+# over the claim, boolean only. The claim is model text: it is never stored, logged or printed.
+# Same semantics as the reference board/d2/score2.py make() variant "v2" bounded; the rule
+# object below is pinned by sha256 in tests (2ca36df2...).
+TEXT_LOGO_COUNT_RULE = {
+    "any_digit": True,
+    "case_insensitive": True,
+    "digit_exempt_near": {"max_token_distance": 3,
+                          "stems": ["час", "o'clock", "положени", "position"]},
+    "name": "v2",
+    "not_followed_by": {"text": ["ile"], "текст": ["ил"]},
+    "stems_substring": ["надпис", "текст", "логотип", "лого", "бренд", "марк", "количеств", "число",
+                        "штук", "text", "logo", "brand", "label", "print", "count", "number",
+                        "quantity", "четыр", "пят", "шест"],
+    "stems_word_start": ["пар", "pair", "single", "double"],
+    "tokens": "[\\w'’]+",
+    "words_whole": ["два", "две", "двух", "три", "трёх", "трех", "оба", "обе", "two", "three",
+                    "four", "both"],
+}
+
+
+def _tlc_regex(rule):
+    nf = rule["not_followed_by"]
+    pats = []
+    for stem in rule["stems_substring"]:
+        after = nf.get(stem)
+        pats.append(re.escape(stem) + ("(?!%s)" % "|".join(map(re.escape, after)) if after else ""))
+    pats += [r"(?<!\w)" + re.escape(stem) for stem in rule["stems_word_start"]]
+    pats += [r"(?<!\w)" + re.escape(word) + r"(?!\w)" for word in rule["words_whole"]]
+    return re.compile("|".join(pats))
+
+
+_TLC_RX = _tlc_regex(TEXT_LOGO_COUNT_RULE)
+_TLC_TOKEN = re.compile(TEXT_LOGO_COUNT_RULE["tokens"])
+_TLC_DIGIT = re.compile(r"\d")
+
+
+def text_logo_count(claim):
+    """True when the claim names a text, a logo or a count (rule B treats it as fine-grained).
+
+    Boolean only; the claim is not kept, logged or printed. See TEXT_LOGO_COUNT_RULE."""
+    text = str(claim).casefold()
+    if _TLC_RX.search(text):
+        return True
+    near = TEXT_LOGO_COUNT_RULE["digit_exempt_near"]
+    window, stems = near["max_token_distance"], tuple(near["stems"])
+    tokens = _TLC_TOKEN.findall(text)
+    for i, token in enumerate(tokens):
+        if _TLC_DIGIT.search(token):
+            if not any(tokens[j].startswith(stems)
+                       for j in range(max(0, i - window), min(len(tokens), i + window + 1))):
+                return True
+    return False
+
+
 def is_fine(roi):
     return roi[2] * roi[3] < FINE_ROI_AREA
 
@@ -182,7 +240,7 @@ def _classify(validated, first, second):
     """T2 aggregation plus the product-level class of every attribute, in inventory order.
 
     Returns (rows, aggregate); a row is {"attribute_id", "label", "outcome", "evidence":
-    (first, second), "fine", "cls"} with cls in confirmed / differs / one of _REASON_ORDER.
+    (first, second), "fine", "tlc", "both_match", "cls"} with cls in confirmed / differs / one of _REASON_ORDER.
     """
     try:
         aggregate = t2.aggregate_responses(first, second)
@@ -210,7 +268,9 @@ def _classify(validated, first, second):
         else:
             cls = "weak_evidence"
         rows.append({"attribute_id": aid, "label": label_of(inventory[aid]["claim"]),
-                     "outcome": outcome, "evidence": evidence, "fine": fine, "cls": cls})
+                     "outcome": outcome, "evidence": evidence, "fine": fine, "cls": cls,
+                     "tlc": text_logo_count(inventory[aid]["claim"]),
+                     "both_match": left[aid]["verdict"] == right[aid]["verdict"] == "MATCH"})
     return rows, aggregate
 
 
@@ -250,7 +310,7 @@ def assess(validated, first, second):
 # Per-attribute codes (WP-CONTROLS-01, D-8, D-10): a compact record of one completed check.
 # Enum codes and small integers only: never a claim, label, observation, attribute_id,
 # roi value, id or hash. Format documented in docs/t4-vision.md.
-CODES_VERSION = 1
+CODES_VERSION = 2
 CODES_MAX = 160                       # length cap of the compact string
 CODE_OUTCOME = {"MATCH": "M", "MISMATCH": "X", "NEEDS_REVIEW": "N", "ASYMMETRIC_PASS": "A",
                 "NOT_VISIBLE_IN_REFERENCE": "V"}
@@ -274,25 +334,27 @@ def code_record(validated, first, second):
     """Two T2-validated compare responses -> the code record of the check.
 
     {"a": status, "extra": "none"|"unconfirmed"|"confirmed", "attrs": [{"pos": 1.., "outcome",
-    "evidence": (e1, e2), "fine": bool, "cls"}]}. `a` equals assess(...)["status"].
+    "evidence": (e1, e2), "fine": bool, "tlc": bool,
+    "both_match": bool, "cls"}]}. `a` equals assess(...)["status"].
     """
     rows, aggregate = _classify(validated, first, second)
     extra = _extra_of(aggregate)
     attrs = [{"pos": i, "outcome": r["outcome"], "evidence": r["evidence"], "fine": r["fine"],
-              "cls": r["cls"]} for i, r in enumerate(rows, 1)]
+              "tlc": r["tlc"], "both_match": r["both_match"], "cls": r["cls"]} for i, r in enumerate(rows, 1)]
     return {"a": status_of([r["cls"] for r in rows], extra), "extra": extra, "attrs": attrs}
 
 
 def format_codes(record):
-    """Compact string: `<pos><outcome><ev1><ev2><fine 0|1><class>` per attribute joined by
+    """Compact string: `<pos><outcome><ev1><ev2><fine 0|1><tlc 0|1><both-MATCH 0|1><class>` per attribute joined by
     ',', then ';' and the extra code. Fixed alphabet [0-9A-Za-z,;], at most CODES_MAX chars."""
-    items = ["%d%s%s%s%d%s" % (a["pos"], CODE_OUTCOME[a["outcome"]], CODE_EVIDENCE[a["evidence"][0]],
-                               CODE_EVIDENCE[a["evidence"][1]], 1 if a["fine"] else 0, CODE_CLASS[a["cls"]])
+    items = ["%d%s%s%s%d%d%d%s" % (a["pos"], CODE_OUTCOME[a["outcome"]], CODE_EVIDENCE[a["evidence"][0]],
+                               CODE_EVIDENCE[a["evidence"][1]], 1 if a["fine"] else 0, 1 if a["tlc"] else 0,
+                               1 if a["both_match"] else 0, CODE_CLASS[a["cls"]])
              for a in record["attrs"]]
     return (",".join(items) + ";" + CODE_EXTRA[record["extra"]])[:CODES_MAX]
 
 
 def codes_line(record):
-    """`check_codes v=1 a=<A status> n=<attrs> codes=<compact>` (no ids, no text)."""
+    """`check_codes v=2 a=<A status> n=<attrs> codes=<compact>` (no ids, no text)."""
     return "check_codes v=%d a=%s n=%d codes=%s" % (CODES_VERSION, record["a"], len(record["attrs"]),
                                                     format_codes(record))

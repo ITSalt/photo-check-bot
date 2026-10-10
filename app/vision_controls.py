@@ -16,7 +16,7 @@ provider call) and the run passes only if positive MATCH >= 90% and negative MIS
 (UNAVAILABLE counts against both): prints CONTROLS PASS (exit 0) or CONTROLS FAIL (exit 1).
 A recrop row whose cand equals ref is refused (exit 2): by validate_manifest under --gate,
 by a row check in default mode.
---codes FILE writes one line per run: `kind=<kind> check_codes v=1 a=<STATUS> n=<N> codes=<compact>`
+--codes FILE writes one line per run: `kind=<kind> check_codes v=2 a=<STATUS> n=<N> codes=<compact>`
 (per-attribute codes, WP-CONTROLS-01; or `kind=<kind> unavailable` when the run has no record)
 for `python3 -m app.recompute FILE`. No image path, claim, label or model text is written.
 After the results it prints the format-reject counts by stage x rule (fixed rule codes from
