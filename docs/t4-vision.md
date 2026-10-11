@@ -341,10 +341,10 @@ evidence NONE in both orders, and only on a v=3 line).
 A redeploy recreates the container and `docker logs` restarts, so `app/codes_log.py` (a
 `logging.Handler` attached in `app/bot.py`, nothing changed in `vision_compare.py`) appends the
 two code kinds to `DATA_DIR/codes.log` (default `/data/codes.log`):
-`<YYYY-MM-DD UTC> check_codes v=2 a=<STATUS> n=<N> codes=<compact>` and
+`<YYYY-MM-DD UTC> check_codes v=3 a=<STATUS> n=<N> codes=<compact>` and
 `<YYYY-MM-DD UTC> verdict_feedback a=<MATCH|MISMATCH|NEEDS_REVIEW> diff=<color|size|logo|model|other>`.
 Date only, no time of day. A record is written only when its message is exactly one of these
-formats (`check_codes` v=1 and v=2 are both accepted and also parsed with the recompute parser, so a forged line is dropped);
+formats (`check_codes` v=1, v=2 and v=3 are accepted and also parsed with the recompute parser, so a forged line is dropped);
 every other record (`vision_call`, `check_done`, free text, an id) is dropped.
 
 - File: created 0600, appended with `O_APPEND`, one line per record. A write failure logs

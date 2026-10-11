@@ -53,8 +53,8 @@ MAX_IMAGES_PER_CALL = 2
 
 # Input, text. chat_payload refuses more than MAX_PROMPT_BYTES of UTF-8 text in one
 # request (PROMPT_TOO_LONG). A token covers at least one byte (byte-fallback tokenizer),
-# so text tokens <= bytes. The compare prompt is about 2,300 bytes plus the inventory
-# (about 180 bytes per attribute, 12 at most: about 4,500 bytes in all).
+# so text tokens <= bytes. The compare prompt is about 2,600 bytes plus the inventory
+# (about 200 bytes per attribute, 12 at most: about 5,100 bytes in all; WP-CONTROLS-04).
 # PROMPT_OVERHEAD_TOKENS covers message framing and image separators.
 MAX_PROMPT_BYTES = 6000
 PROMPT_OVERHEAD_TOKENS = 300

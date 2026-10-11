@@ -3,7 +3,7 @@
 A `logging.Handler` attached at startup in app/bot.py. It keeps only two record kinds and
 writes each as one line `<YYYY-MM-DD UTC> <message>` (date only, no time of day):
 
-  check_codes v=<1|2> a=<STATUS> n=<N> codes=<compact>   (the format app/recompute.py reads)
+  check_codes v=<1|2|3> a=<STATUS> n=<N> codes=<compact>   (the format app/recompute.py reads)
   verdict_feedback a=<MATCH|MISMATCH|NEEDS_REVIEW> diff=<color|size|logo|model|other>
 
 Every message is validated against its fixed format (check_codes also through the recompute
@@ -37,7 +37,7 @@ RETRY_S = 3600
 
 log = logging.getLogger("codes_log")
 
-_CHECK = re.compile(r"check_codes v=([12]) a=(?:MATCH|MISMATCH|NEEDS_REVIEW) n=([0-9]{1,2}) "
+_CHECK = re.compile(r"check_codes v=([123]) a=(?:MATCH|MISMATCH|NEEDS_REVIEW) n=([0-9]{1,2}) "
                     r"codes=([0-9A-Za-z,;]{1,160})")
 _FEEDBACK = re.compile(r"verdict_feedback a=(?:MATCH|MISMATCH|NEEDS_REVIEW) "
                        r"diff=(?:color|size|logo|model|other)")

@@ -89,7 +89,8 @@ class WriteTests(Base):
                        "check_codes v=2 a=MATCH n=2 codes=1MDD011C 2MDD011C;n",
                        "check_codes v=2 a=MATCH n=2 codes=é1MDD011C,2MDD011C;n",
                        "check_codes v=2 a=MATCH n=2 codes=" + "A" * 161,
-                       "check_codes v=3 a=MATCH n=2 codes=1MDD011C,2MDD011C;n",
+                       "check_codes v=4 a=MATCH n=2 codes=1MDD011C,2MDD011C;n",
+                       "check_codes v=2 a=NEEDS_REVIEW n=2 codes=1NNN000H,2MDD011C;n",   # H is a v=3 letter
                        "check_codes v=2 a=OTHER n=2 codes=1MDD011C,2MDD011C;n",
                        "check_codes v=2 a=MATCH n=3 codes=1MDD011C,2MDD011C;n",
                        "check_codes v=2 a=MATCH n=2 codes=1MDD011C,2MDD011C;z"):
@@ -277,7 +278,8 @@ class RoundTripTests(Base):
         self.logger.info(FEEDBACK)
         lines = self.read().splitlines()
         self.assertEqual(len(lines), 4)
-        self.assertEqual(sum(1 for x in lines if " check_codes v=2 " in x), 3)
+        self.assertEqual(sum(1 for x in lines if " check_codes v=3 " in x), 2)     # the two real checks
+        self.assertEqual(sum(1 for x in lines if " check_codes v=2 " in x), 1)     # CHECK, an old line
         out = io.StringIO()
         with redirect_stdout(out):
             code = recompute._main([self.path])
