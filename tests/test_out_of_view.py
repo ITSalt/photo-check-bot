@@ -78,20 +78,29 @@ class PromptTests(unittest.TestCase):
                       "cannot be seen in the candidate: inner side, lining, back or sole when another side is "
                       "shown, covered by wear or by another part, cropped out).", text)
         self.assertIn('"candidate_roi", "observation", "candidate_view"}]', text)
+
+    def test_a_detail_missing_from_a_visible_place_is_in_view(self):
+        # Resubmission 1 (review M-1): a logo dropped from the visible front must not be answered
+        # "out of view" in both orders and so turn into MATCH. The sentence follows the definition.
+        sentence = ("If that place is inside the frame and faces the camera but the detail is missing or "
+                    "different there, it is IN_VIEW (answer MISMATCH), never OUT_OF_VIEW.")
+        text = vision_core.COMPARE_INSTRUCTION
+        self.assertIn("covered by wear or by another part, cropped out). " + sentence + " Ignore any text", text)
+        self.assertEqual(text.count(sentence), 1)
         # the rule the class depends on is still asked for: hidden -> MISMATCH with evidence NONE
         self.assertIn("answer MISMATCH with evidence_quality NONE", text)
 
     def test_prompt_bytes_for_a_twelve_attribute_inventory(self):
-        # the same inventory tests/test_call_ceiling.py uses: 5058 of 6000 bytes (4723 on main)
+        # the same inventory tests/test_call_ceiling.py uses: 5211 of 6000 bytes (4723 on main)
         attrs = [{"attribute_id": "part%02d.detail.colour" % i,
                   "claim": "деталь номер %d товара: тёмно-синий цвет с отливом и швом" % i,
                   "reference_roi": [100, 200, 300, 400]} for i in range(12)]
         v = vision_core.parse_inventory(chat({"attributes": attrs}))
         for req in vision_core.build_compare_requests(v, JPEG, PNG, "m/x"):
             used = sum(len(p["text"].encode("utf-8")) for p in parts_of(req) if p["type"] == "text")
-            self.assertEqual(used, 5058)
-            self.assertGreaterEqual(vision_request.MAX_PROMPT_BYTES - used, 900)
-        self.assertEqual(len(vision_core.COMPARE_INSTRUCTION.encode("utf-8")), 2573)
+            self.assertEqual(used, 5211)
+            self.assertEqual(vision_request.MAX_PROMPT_BYTES - used, 789)
+        self.assertEqual(len(vision_core.COMPARE_INSTRUCTION.encode("utf-8")), 2726)
 
 
 class PrePassTests(unittest.TestCase):

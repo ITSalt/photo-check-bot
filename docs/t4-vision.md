@@ -71,7 +71,9 @@ worn on the generated photo; the logo was listed under "Проверьте са�
 - **Field.** The compare prompt asks, for every result, `candidate_view`: `IN_VIEW` (the place
   of this detail on the product is inside the candidate's frame and faces the camera) or
   `OUT_OF_VIEW` (that place cannot be seen in the candidate: inner side, lining, back or sole
-  when another side is shown, covered by wear or by another part, cropped out). The T2
+  when another side is shown, covered by wear or by another part, cropped out). The prompt
+  adds: "If that place is inside the frame and faces the camera but the detail is missing or
+  different there, it is IN_VIEW (answer MISMATCH), never OUT_OF_VIEW." The T2
   contract (`core_t2`) is unchanged and rejects extra fields, so `vision_core.parse_compare`
   pops the field out of every result BEFORE `validate_response` and keeps it beside the
   validated answer as `"candidate_view": {attribute_id: "IN_VIEW" | "OUT_OF_VIEW"}`. Only the
@@ -96,9 +98,9 @@ worn on the generated photo; the logo was listed under "Проверьте са�
   "Not compared (this place is not visible on the AI photo): <labels>." `too_few_compared`
   adds "Сравнить удалось слишком мало деталей, поэтому посмотрите фото сами." /
   "Too few details could be compared, so please look at the photos yourself."
-- **Prompt size.** The compare instruction grew from 2,238 to 2,573 bytes; the 12-attribute
-  inventory of `tests/test_call_ceiling.py` gives a 5,058-byte prompt (4,723 before) against
-  the 6,000-byte bound, a margin of 942 bytes.
+- **Prompt size.** The compare instruction grew from 2,238 to 2,726 bytes; the 12-attribute
+  inventory of `tests/test_call_ceiling.py` gives a 5,211-byte prompt (4,723 before) against
+  the 6,000-byte bound, a margin of 789 bytes.
 - **Limit.** The view is the model's own claim, like every other field: a different product
   shown from another side could have its differing details called out of view. The minimum
   bounds how much can be left out, and the controls (D-10 safeguard 4: zero false MATCH,
@@ -508,7 +510,7 @@ is a real ceiling only if one call cannot cost more. The constants and their ari
   planning bound from public rules, not measured on this model: the `usage_prompt` numbers of
   the `vision_call` lines show the real count.
 - Text: at most 6,000 UTF-8 bytes of prompt per request (`PROMPT_TOO_LONG` otherwise; today's
-  largest is about 5,100 since WP-CONTROLS-04), at most two images; one token covers at least one byte.
+  largest is about 5,200 since WP-CONTROLS-04), at most two images; one token covers at least one byte.
 - Worst case of one call: (2 x 3,096 + 6,000 + 300 overhead) x 0.75 / 1e6 + 2,800 x 3.75 / 1e6
   = 0.019869 USD, within the 0.02 hold.
 
