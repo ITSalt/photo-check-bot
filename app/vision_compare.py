@@ -25,6 +25,11 @@ DEFAULT_TIMEOUT = 30.0
 _MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,100}$")
 _CODE_RE = re.compile(r"^[A-Z_]{1,32}$")
 _REQUIRED = ("VISION_BASE_URL", "VISION_MODEL", "VISION_HOST_ALLOWLIST", "VISION_API_KEY")
+# WP-CONTROLS-04: a compare result without a valid candidate_view was read as IN_VIEW
+# (app/vision_core.py _pop_views). A repair like the two in answer_rules.FIXES, counted per result.
+VIEW_DEFAULTED = "VIEW_DEFAULTED"
+ANSWER_FIXES = FIXES + (VIEW_DEFAULTED,)
+_COUNTED_FIXES = ("ROI_CLAMPED", VIEW_DEFAULTED)
 
 
 class VisionConfigError(ValueError):
@@ -195,9 +200,9 @@ def make_compare(config, environ, call_provider, core, transport=None, on_call=N
     def report_fixes(stage, fixes):
         """Log (and count) the repairs made to an accepted or rejected answer: codes and counts only."""
         for rule, n in fixes:
-            if rule not in FIXES:
+            if rule not in ANSWER_FIXES:
                 continue
-            if rule == "ROI_CLAMPED":
+            if rule in _COUNTED_FIXES:
                 log.info("vision_answer_fixed stage=%s rule=%s n=%d", stage, rule, int(n))
             else:
                 log.info("vision_answer_fixed stage=%s rule=%s", stage, rule)

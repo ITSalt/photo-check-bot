@@ -21,7 +21,8 @@ RULE_SHA = "2ca36df28ba6edba6da3befeacc00f4a68f84504e473500541d3f07c54d40eeb"
 BIG = [100, 100, 300, 400]            # not fine
 SMALL = [500, 600, 100, 100]          # fine (area < FINE_ROI_AREA)
 COARSE = [{"attribute_id": "body.colour", "claim": "цвет корпуса: синий", "reference_roi": BIG},
-          {"attribute_id": "collar.shape", "claim": "форма воротника: круглый", "reference_roi": BIG}]
+          {"attribute_id": "collar.shape", "claim": "форма воротника: круглый", "reference_roi": BIG},
+          {"attribute_id": "sleeve.length", "claim": "длина рукава: короткий", "reference_roi": BIG}]
 PARTIAL = ("MATCH", "PARTIAL")
 
 
@@ -38,9 +39,9 @@ def b_of(per_order, inventory):
     text = vision_core.codes_line(record)
     r = recompute.recompute([text])
     out = {}
-    for rule in ("A", "B"):
+    for rule in ("A'", "B"):          # a v=3 line: A' is its production rule, B is built on it
         out[rule] = [s for s, n in r["rules"][rule][None].items() if n][0]
-    return out["A"], out["B"], r
+    return out["A'"], out["B"], r
 
 
 class RuleObjectTests(unittest.TestCase):
@@ -114,7 +115,7 @@ class RecordV2Tests(unittest.TestCase):
         self.assertEqual([a["fine"] for a in record["attrs"]], [False, False, True])
         self.assertEqual([a["both_match"] for a in record["attrs"]], [True, True, True])
         self.assertEqual(vision_core.format_codes(record), "1MDD001C,2MDD011C,3MDD101C;n")
-        self.assertTrue(vision_core.codes_line(record).startswith("check_codes v=2 a=MATCH n=3 codes="))
+        self.assertTrue(vision_core.codes_line(record).startswith("check_codes v=3 a=MATCH n=3 codes="))
 
     def test_both_match_false_on_mismatch_and_asymmetry(self):
         diff = ("MISMATCH", "PARTIAL")
@@ -193,7 +194,7 @@ class RuleBTests(unittest.TestCase):
         self.assertEqual(r["rules"]["A"]["same"]["MATCH"], 1)
         self.assertEqual(r["rules"]["C"]["recrop"]["NEEDS_REVIEW"], 1)
         out = "\n".join(recompute.report(r))
-        self.assertIn("rule B: n/a (no check_codes v=2 lines)", out)
+        self.assertIn("rule B: n/a (no check_codes v=2 or v=3 lines)", out)
         self.assertIn("v=1 lines left out of rule B (no flag): 2", out)
 
     def test_mixed_v1_and_v2_b_counts_v2_only(self):
@@ -236,7 +237,7 @@ class RecomputeCarryOverTests(unittest.TestCase):
     def test_shares_one_decimal_half_up(self):
         def share(num, den):
             lines = ["kind=same " + self.OK] * num + ["kind=same unavailable"] * (den - num)
-            return [x for x in recompute.report(recompute.recompute(lines)) if x.startswith("rule A")][0]
+            return [x for x in recompute.report(recompute.recompute(lines)) if x.startswith("rule A:")][0]
         self.assertIn("positive MATCH 12.5% (runs=8)", share(1, 8))
         self.assertIn("positive MATCH 66.7% (runs=3)", share(2, 3))
         self.assertIn("positive MATCH 6.3% (runs=16)", share(1, 16))     # 6.25 -> half up
@@ -284,7 +285,7 @@ class PrivacyTests(unittest.TestCase):
             run_bot_pair(Session(), compare, None)
         lines = [x for x in logs.output if "check_codes " in x]
         self.assertEqual(len(lines), 1)
-        self.assertIn("v=2", lines[0])
+        self.assertIn("v=3", lines[0])
         self.assertNotIn(MARK, repr(logs.output))
         record, _ = record_of([(None, (extra,))] * 2, inv)
         self.assertNotIn(MARK, repr(record))

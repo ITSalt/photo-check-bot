@@ -66,8 +66,11 @@ class Session:
 
 
 FINE = {"attribute_id": "logo.text", "claim": "текст логотипа: BRAND", "reference_roi": [500, 600, 100, 100]}
+# Three attributes: rule A' (WP-CONTROLS-04, D-10) gives MATCH only from 3 confirmed attributes on.
 INV = [{"attribute_id": "button.count", "claim": "пуговицы: две", "reference_roi": [100, 100, 300, 400]},
-       {"attribute_id": "print.layout", "claim": "принт: логотип по центру", "reference_roi": [500, 100, 300, 400]}]
+       {"attribute_id": "print.layout", "claim": "принт: логотип по центру", "reference_roi": [500, 100, 300, 400]},
+       {"attribute_id": "body.colour", "claim": "цвет ткани: синий", "reference_roi": [100, 550, 300, 400]}]
+
 
 
 def chat(content, usage=None, finish="stop"):
@@ -78,10 +81,15 @@ def chat(content, usage=None, finish="stop"):
     return body
 
 
-def result(attr, verdict="MATCH", evidence="DIRECT"):
-    return {"attribute_id": attr["attribute_id"], "verdict": verdict, "evidence_quality": evidence,
-            "reference_roi": None if verdict == "NOT_VISIBLE_IN_REFERENCE" else attr["reference_roi"],
-            "candidate_roi": [120, 90, 300, 400], "observation": "Same in both."}
+def result(attr, verdict="MATCH", evidence="DIRECT", view=None):
+    """One compare result. `view` is candidate_view (WP-CONTROLS-04); None leaves the field
+    out: that is the bare T2 shape, read as IN_VIEW by vision_core.parse_compare."""
+    out = {"attribute_id": attr["attribute_id"], "verdict": verdict, "evidence_quality": evidence,
+           "reference_roi": None if verdict == "NOT_VISIBLE_IN_REFERENCE" else attr["reference_roi"],
+           "candidate_roi": [120, 90, 300, 400], "observation": "Same in both."}
+    if view is not None:
+        out["candidate_view"] = view
+    return out
 
 
 def compare_answer(sha, overrides=None, unmapped=(), attrs=INV):
@@ -100,12 +108,15 @@ class FakeModel:
 
     per_order[i] is (overrides, unmapped) for the i-th compare call; `mutate` may edit
     the answer dict; `fail_at` is a stage index (0 inventory, 1/2 compare) that returns
-    the given reply instead.
+    the given reply instead. Like the real model under the WP-CONTROLS-04 prompt it writes
+    candidate_view on every result (IN_VIEW unless an override says otherwise); `views=False`
+    plays a model that leaves the field out.
     """
     def __init__(self, per_order=((None, ()), (None, ())), inventory=INV, usage=None,
-                 fail_at=None, reply=None, mutate=None):
+                 fail_at=None, reply=None, mutate=None, views=True):
         self.per_order, self.inventory, self.usage = per_order, inventory, usage
         self.fail_at, self.reply, self.mutate = fail_at, reply, mutate
+        self.views = views
         self.requests = []
 
     def __call__(self, request, headers, timeout):
@@ -121,6 +132,9 @@ class FakeModel:
         sha = next(p["text"].split(": ", 1)[1] for p in parts if p["text"].startswith("inventory_sha256: "))
         overrides, unmapped = self.per_order[index - 1]
         answer = compare_answer(sha, overrides, unmapped, attrs=self.inventory)
+        if self.views:
+            for item in answer["results"]:
+                item.setdefault("candidate_view", "IN_VIEW")
         if self.mutate:
             self.mutate(index, answer)
         return {"status": 200, "body": chat(answer, self.usage)}
@@ -214,7 +228,7 @@ class RequestTests(unittest.TestCase):
 class CoreTests(unittest.TestCase):
     def test_inventory_good(self):
         v = vision_core.parse_inventory(chat({"attributes": INV}))
-        self.assertEqual(v["attribute_ids"], ["button.count", "print.layout"])
+        self.assertEqual(v["attribute_ids"], ["button.count", "print.layout", "body.colour"])
         self.assertEqual(v["reference_photo_id"], "reference")
         self.assertEqual(v["sha256"], t2.sha256_hex(v["inventory"]))
 
@@ -234,7 +248,9 @@ class CoreTests(unittest.TestCase):
     def test_compare_validated_by_t2(self):
         v = vision_core.parse_inventory(chat({"attributes": INV}))
         good = compare_answer(v["sha256"])
-        self.assertEqual(vision_core.parse_compare(chat(good), v), good)
+        # exactly what T2 validated, plus the side map of candidate views (WP-CONTROLS-04)
+        views = {a["attribute_id"]: "IN_VIEW" for a in INV}
+        self.assertEqual(vision_core.parse_compare(chat(good), v), {**good, "candidate_view": views})
         bad = []
         x = compare_answer(v["sha256"]); x["inventory_sha256"] = "0" * 64; bad.append(x)
         x = compare_answer(v["sha256"]); x["results"].pop(); bad.append(x)
@@ -263,8 +279,9 @@ def reasons(result):
 class AssessTests(unittest.TestCase):
     def test_all_confirmed_is_match(self):
         r = run([(None, ()), (None, ())])
-        self.assertEqual(r, {"status": "MATCH", "total": 2, "confirmed": ["button.count", "print.layout"],
-                             "to_check": [], "differs": [], "extra": "none"})
+        self.assertEqual(r, {"status": "MATCH", "total": 3,
+                             "confirmed": ["button.count", "print.layout", "body.colour"],
+                             "to_check": [], "differs": [], "extra": "none", "not_compared": []})
 
     def test_prompts_exclude_scene_and_ask_for_product_only(self):
         inv = vision_request.INVENTORY_INSTRUCTION
@@ -274,11 +291,13 @@ class AssessTests(unittest.TestCase):
         self.assertIn("ONLY parts of the product itself", vision_core.COMPARE_INSTRUCTION)
         self.assertIn("NEVER list the background", vision_core.COMPARE_INSTRUCTION)
         self.assertIn("MISMATCH with evidence_quality NONE", vision_core.COMPARE_INSTRUCTION)
+        for word in ("candidate_view", "IN_VIEW", "OUT_OF_VIEW", "inner side", "cropped out"):
+            self.assertIn(word, vision_core.COMPARE_INSTRUCTION)
 
     def test_to_check_reasons(self):
         weak = ("MATCH", "PARTIAL")
         r = run([({"button.count": weak}, ()), ({"button.count": weak}, ())])
-        self.assertEqual((r["status"], reasons(r), r["confirmed"]), ("NEEDS_REVIEW", {"button.count": "weak_evidence"}, ["print.layout"]))
+        self.assertEqual((r["status"], reasons(r), r["confirmed"]), ("NEEDS_REVIEW", {"button.count": "weak_evidence"}, ["print.layout", "body.colour"]))
         nv = ("NOT_VISIBLE_IN_REFERENCE", "NONE")
         r = run([({"button.count": nv}, ())] * 2)
         self.assertEqual(reasons(r), {"button.count": "not_visible"})
@@ -299,7 +318,7 @@ class AssessTests(unittest.TestCase):
         r = run([both, both])
         self.assertEqual(r["status"], "MISMATCH")
         self.assertEqual(r["differs"], [{"attribute_id": "print.layout", "label": "принт"}])
-        self.assertEqual(r["confirmed"], ["button.count"])
+        self.assertEqual(r["confirmed"], ["button.count", "body.colour"])
 
     def test_fine_detail_rules(self):
         inv = INV + [FINE]

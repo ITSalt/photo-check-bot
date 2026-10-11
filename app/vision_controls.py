@@ -16,24 +16,39 @@ provider call) and the run passes only if positive MATCH >= 90% and negative MIS
 (UNAVAILABLE counts against both): prints CONTROLS PASS (exit 0) or CONTROLS FAIL (exit 1).
 A recrop row whose cand equals ref is refused (exit 2): by validate_manifest under --gate,
 by a row check in default mode.
---codes FILE writes one line per run: `kind=<kind> check_codes v=2 a=<STATUS> n=<N> codes=<compact>`
+--codes FILE writes one line per run: `kind=<kind> check_codes v=3 a=<STATUS> n=<N> codes=<compact>`
 (per-attribute codes, WP-CONTROLS-01; or `kind=<kind> unavailable` when the run has no record)
 for `python3 -m app.recompute FILE`. No image path, claim, label or model text is written.
 After the results it prints the format-reject counts by stage x rule (fixed rule codes from
-app.answer_rules, only for the real provider path; none when `compare` is injected).
+app.answer_rules, only for the real provider path; none when `compare` is injected); the
+repaired-answers part of that table also counts VIEW_DEFAULTED (a compare answer where at least
+one result had no valid candidate_view and was read as IN_VIEW, WP-CONTROLS-04).
 Prints nothing but counts, kinds and fixed codes: no file paths, bytes or model text.
 """
 import json
 import logging
+import re
 import sys
 
 from app import controls_gate
 from app.answer_rules import RejectTally
+from app.vision_compare import VIEW_DEFAULTED
 
 STATUSES = ("MATCH", "MISMATCH", "NEEDS_REVIEW", "UNAVAILABLE")
 POSITIVE = ("same", "recrop")
 KINDS = POSITIVE + ("different",)
 THRESHOLD = 0.90
+
+
+class ControlsTally(RejectTally):
+    """RejectTally that also counts the VIEW_DEFAULTED repair (once per call, like the others)."""
+
+    def add(self, stage, code, rule):
+        if code == "FIXED" and rule == VIEW_DEFAULTED:
+            stage = stage if re.fullmatch(r"[a-z_]{1,20}", str(stage)) else "unknown"
+            self.fixed[(stage, VIEW_DEFAULTED)] = self.fixed.get((stage, VIEW_DEFAULTED), 0) + 1
+            return
+        super().add(stage, code, rule)
 
 
 def run_controls(rows, compare, repeats, read, outcomes=None, record_box=None, on_run=None):
@@ -100,7 +115,7 @@ def _main(argv, environ, compare=None, read=None, make=None):
     if len(args) != 1 or repeats < 1:
         print("usage: python3 -m app.vision_controls MANIFEST.json [--repeats N] [--gate] [--codes FILE]")
         return 2
-    rejects = RejectTally()
+    rejects = ControlsTally()
     record_box = []
     if compare is None:
         if make is None:
