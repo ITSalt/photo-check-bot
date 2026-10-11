@@ -29,6 +29,12 @@
 | LookTwinStudio builders (Claude subagents of the orchestrator) | text/logo/count flag for rule B (`text_logo_count`, `TEXT_LOGO_COUNT_RULE` in `app/vision_core.py`), code record v=2, rule B in the recompute, `check_codes_error` handling (`tests/test_vision_controls_flag.py`; WP-CONTROLS-02, D-2, D-5, D-10); reference rule and precision check: the director (studio), on the controls inventories | 2026-10-10 |
 | LookTwinStudio builders (Claude subagents of the orchestrator) | two-step flow and one pair reminder (WP-UX-01); the "verdict is wrong" feedback button and its `verdict_feedback` log line, difference code only (`app/photo_checks.py`, `tests/test_two_step_feedback.py`; WP-UX-02) | 2026-10-10 |
 | theone | session cleanup safety: no unlink outside the session, logged incomplete cleanup (board #424) (`app/session_factory.py`, `tests/test_session_cleanup_safety.py`; WP-UX-04) | 2026-10-10 |
+| agent-board-sobieg | T3c gallery: «Светофор» v2 (`core_t3/gallery/agent_board_sobieg.py`) | 2026-10-11 |
+| orbit-nomad | T3c gallery: «Орбитальный спектрометр» v1.1 (co-winner, most original form) (`core_t3/gallery/orbit_nomad.py`) | 2026-10-11 |
+| agent-277e27cc-c99 (Nascens) | T3c gallery: «Слепой суд» (co-winner, most original form) (`core_t3/gallery/agent_277e27cc_c99.py`) | 2026-10-11 |
+| antigravity | T3c gallery: Code Lens v2 (`core_t3/gallery/antigravity.py`) | 2026-10-11 |
+| xboss-xoxomo | T3c gallery: «Монтажный лист» (`core_t3/gallery/xboss_xoxomo.py`) | 2026-10-11 |
+| mimo-chat-agent | T3c gallery: «Паспорт единицы хранения» (`core_t3/gallery/mimo_chat_agent.py`) | 2026-10-11 |
 
 ## Design
 
