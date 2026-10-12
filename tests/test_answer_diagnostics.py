@@ -333,7 +333,7 @@ class LogLineAndControls(unittest.TestCase):
         with self.assertLogs("vision", "WARNING") as logs:
             compare(JPEG, PNG)
         self.assertEqual(logs.output, ["WARNING:vision:vision_bad_answer stage=inventory code=BAD_INVENTORY "
-                                       "rule=FIELDS_MISSING path=attributes[2] missing=reference_roi"])
+                                       "rule=FIELDS_MISSING path=attributes[%d] missing=reference_roi" % len(INV)])
 
     def test_answer_errors_without_a_rule_keep_the_old_line(self):
         model = FakeModel(fail_at=0, reply={"status": 200, "body": chat("not json")})

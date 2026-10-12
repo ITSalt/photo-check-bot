@@ -25,8 +25,10 @@ Modules in `app/`:
    `validate_inventory`; its SHA-256 is pinned. At most 12 attributes.
 2. **Two compare calls**: T2 `build_ordered_calls` gives the two image orders (roles
    stay attached to the photos, only positions swap, identical inventory bytes). The
-   model answers `photo-compare/2`, echoing the inventory digest. Each answer goes
-   through T2 `validate_response`; a bad answer stops the chain (no third call).
+   model answers `photo-compare/2`, echoing the inventory digest, plus one field of ours per
+   result, `candidate_view` (see "Out-of-view details" below), which `parse_compare` takes out
+   first. Each answer then goes through T2 `validate_response`; a bad answer stops the chain
+   (no third call).
 3. T2 `aggregate_responses` combines both orders. Each of the three calls goes through
    the real T3b adapter, `core_t3/photo_compare_t3_candidate.py` `call_provider(request,
    transport, environ, logger)`; there is no other provider path and it is not
@@ -43,15 +45,66 @@ T2 decides every per-attribute outcome and the unmapped-element coverage. On top
 {"status", "total", "confirmed": [attribute_id],
  "to_check": [{"attribute_id", "label", "reason"}],      # reason: not_visible | orders_disagree |
  "differs": [{"attribute_id", "label"}],                 #         weak_evidence | fine_detail_unverified
- "extra": "none" | "unconfirmed" | "confirmed"}
+ "extra": "none" | "unconfirmed" | "confirmed",
+ "not_compared": [{"attribute_id", "label"}],            # out of view in the candidate (D-10)
+ "reason": "too_few_compared"}                           # only when the MATCH minimum alone failed
 ```
+
+The status is rule A' (`vision_core.rule_a_prime`; rule A until WP-CONTROLS-04, see below):
 
 - `MISMATCH`: some attribute is a both-order DIRECT mismatch (present in the reference,
   clearly absent or different where it should be visible), or an extra product element is
-  confirmed in both orders.
-- `MATCH`: every attribute is a both-order DIRECT match and neither order reported an extra.
-- `NEEDS_REVIEW`: anything else, with the `to_check` list saying what and why.
+  confirmed in both orders. Unchanged from rule A.
+- `MATCH`: nothing differs, nothing is left to check, neither order reported an extra, AND at
+  least 3 attributes are confirmed (both-order DIRECT match) AND confirmed + to_check is at
+  least half of the inventory, rounded up. Out-of-view attributes are neither confirmed nor
+  to check.
+- `NEEDS_REVIEW`: anything else, with the `to_check` list saying what and why; `reason` is
+  `too_few_compared` when only the minimum failed.
 - `UNAVAILABLE`: provider failure or an unusable answer.
+
+### Out-of-view details are not comparable (WP-CONTROLS-04, D-10)
+
+Trigger: the owner's live run of 11.10, a baby bodysuit with the logo on the inner side, shown
+worn on the generated photo; the logo was listed under "Проверьте сами" as "не видно".
+
+- **Field.** The compare prompt asks, for every result, `candidate_view`: `IN_VIEW` (the place
+  of this detail on the product is inside the candidate's frame and faces the camera) or
+  `OUT_OF_VIEW` (that place cannot be seen in the candidate: inner side, lining, back or sole
+  when another side is shown, covered by wear or by another part, cropped out). The prompt
+  adds: "If that place is inside the frame and faces the camera but the detail is missing or
+  different there, it is IN_VIEW (answer MISMATCH), never OUT_OF_VIEW." The T2
+  contract (`core_t2`) is unchanged and rejects extra fields, so `vision_core.parse_compare`
+  pops the field out of every result BEFORE `validate_response` and keeps it beside the
+  validated answer as `"candidate_view": {attribute_id: "IN_VIEW" | "OUT_OF_VIEW"}`. Only the
+  two enum strings are kept. A missing or invalid value becomes `IN_VIEW` (the conservative
+  default: nothing is hidden from the seller) and is counted as the fix code `VIEW_DEFAULTED`;
+  the value itself is dropped in the parser and never reaches a log, the code record or the
+  notes. The field anywhere else (top level, an unmapped element) is still a format reject.
+- **Class.** `out_of_view` needs ALL of: both orders say `OUT_OF_VIEW`, both orders give
+  evidence `NONE`, neither verdict is MATCH. One order only, or any PARTIAL / DIRECT evidence,
+  keeps the class the attribute had before (`not_visible`, `weak_evidence`, `differs`, ...):
+  a detail the model saw differ stays a MISMATCH whatever view it claims.
+- **Rule A'.** An `out_of_view` attribute is listed in `not_compared`, not in `to_check`, and
+  by itself never turns MATCH into anything else. The MATCH minimum (3 confirmed, half of the
+  inventory compared) is the safeguard against "almost everything was out of view".
+- **What changed against rule A when nothing is out of view:** only the minimum. An inventory
+  of 1 or 2 attributes, all confirmed, was MATCH and is now NEEDS_REVIEW with
+  `too_few_compared` (`tests/test_out_of_view.py` `PropertyTests` checks that this is the only
+  difference over random answers).
+- **Reply.** `app/verdict_notes.py`: out-of-view items never appear under "Проверьте сами" /
+  "Check yourself". They get one neutral line, the only note a MATCH can carry:
+  "Не сравнивалось (на ИИ-фото это место не видно): <labels>." /
+  "Not compared (this place is not visible on the AI photo): <labels>." `too_few_compared`
+  adds "Сравнить удалось слишком мало деталей, поэтому посмотрите фото сами." /
+  "Too few details could be compared, so please look at the photos yourself."
+- **Prompt size.** The compare instruction grew from 2,238 to 2,726 bytes; the 12-attribute
+  inventory of `tests/test_call_ceiling.py` gives a 5,211-byte prompt (4,723 before) against
+  the 6,000-byte bound, a margin of 789 bytes.
+- **Limit.** The view is the model's own claim, like every other field: a different product
+  shown from another side could have its differing details called out of view. The minimum
+  bounds how much can be left out, and the controls (D-10 safeguard 4: zero false MATCH,
+  including different-product pairs in different views) are the check.
 
 The T3a result of `run_bot_pair` stays exactly `{"schema_version", "status"}` (the public
 contract says "exactly"). The lists ride beside it: `compare` returns them,
@@ -227,11 +280,11 @@ chat, token or file id and no free text is logged or stored. A refused press (no
 token, already reported, older than 24 hours, unknown code) gets the `feedback_refused` text and
 no log line.
 
-### Per-attribute codes (WP-CONTROLS-01/02, D-8, D-10)
+### Per-attribute codes (WP-CONTROLS-01/02/04, D-8, D-10)
 
 One line per completed check (`assess` returned; never for a refusal or UNAVAILABLE), logged by
 `compare` in `app/vision_compare.py`:
-`check_codes v=2 a=<A status> n=<attributes> codes=<compact>`. `a` is the `assess` status.
+`check_codes v=3 a=<A' status> n=<attributes> codes=<compact>`. `a` is the `assess` status.
 Enum codes and small integers only, alphabet `[0-9A-Za-z,;]`, `codes` at most 160 characters
 (12 attributes use about 115): no claim, label, observation, attribute_id, roi value, user,
 chat or file id, no hash. The result of `assess` is unchanged. If the line cannot be built the
@@ -248,12 +301,15 @@ Token = `<pos><outcome><ev1><ev2><fine><tlc><mm><class>`:
 | `fine` | `1` reference box area < `FINE_ROI_AREA`, else `0` |
 | `tlc` (v=2) | `1` the claim names a text, a logo or a count (`vision_core.text_logo_count`), else `0` |
 | `mm` (v=2) | `1` the verdict was MATCH in both orders (the outcome alone cannot tell MATCH from MISMATCH when the evidence is PARTIAL), else `0` |
-| `class` (final, used by rule A) | `C` confirmed, `D` differs, `V` not_visible, `O` orders_disagree, `W` weak_evidence, `F` fine_detail_unverified |
+| `class` (final, used by rule A') | `C` confirmed, `D` differs, `V` not_visible, `O` orders_disagree, `W` weak_evidence, `F` fine_detail_unverified, `H` (v=3) out_of_view: not compared |
 | extra (after `;`) | `n` none, `u` unconfirmed, `c` confirmed |
 
-Example: `check_codes v=2 a=NEEDS_REVIEW n=2 codes=1NPP011W,2MDD001C;n`.
-Version 1 (WP-CONTROLS-01) had no `tlc` and no `mm`: `<pos><outcome><ev1><ev2><fine><class>`; the
-recompute still reads such lines (rule B is n/a for them).
+Example: `check_codes v=3 a=MATCH n=4 codes=1MDD001C,2MDD001C,3MDD001C,4NNN110H;n` (three
+confirmed, the fourth out of view in both orders).
+Version 3 (WP-CONTROLS-04) has the token of version 2 plus the class letter `H`, and its `a=` is
+rule A'; the views themselves are not recorded. Version 2 (WP-CONTROLS-02) has no `H` and its
+`a=` is rule A. Version 1 (WP-CONTROLS-01) had no `tlc` and no `mm`:
+`<pos><outcome><ev1><ev2><fine><class>`. The recompute reads all three (rule B is n/a for v=1).
 
 The text/logo/count flag (WP-CONTROLS-02, D-2 option (a), D-5) is a runtime keyword heuristic
 over the inventory claim, boolean only: `vision_core.TEXT_LOGO_COUNT_RULE` (sha256 of its
@@ -261,30 +317,36 @@ canonical JSON `2ca36df28ba6edba6da3befeacc00f4a68f84504e473500541d3f07c54d40eeb
 `tests/test_vision_controls_flag.py`) and `text_logo_count(claim)`. The claim is model text: it is
 used in memory to compute the boolean and is never stored, logged or printed. Known miss
 (backlog): `двойной шов` is not flagged. The flag only feeds rule B in the recompute; the production
-verdict stays rule A.
+verdict is rule A' (rule A before v=3).
 
 `python3 -m app.vision_controls MANIFEST --codes FILE` writes the same line per run, prefixed by
 `kind=same|recrop|different` (`kind=<kind> unavailable` for a run without a record), no image path.
 `python3 -m app.recompute FILE [FILE ...]` reads such files or bot logs and recomputes:
-rule A (as built; must equal the recorded `a=` on every line, otherwise exit 1 with the count),
-rule B (a coarse attribute, not fine and not text/logo/count, counts as confirmed with MATCH in
-both orders and evidence PARTIAL or better; v=2 lines only, v=1 lines are counted and left out),
-rule C (rule A on the first 8 inventory attributes, D-10). B and C keep the extra-element outcome.
+rule A' (the production rule since v=3, counted on v=3 lines only; must equal their recorded
+`a=`), rule A (the rule before D-10 on every line, `H` counted as not_visible; must equal the
+recorded `a=` of a v=1 / v=2 line; on v=3 lines it stands next to A' and shows what D-10
+changed), rule B (a coarse attribute, not fine and not text/logo/count, counts as confirmed with
+MATCH in both orders and evidence PARTIAL or better; v=2 and v=3 lines, v=1 lines are counted and
+left out), rule C (the first 8 inventory attributes). B and C are built on the production rule
+of the line (A' for v=3, A for v=1 / v=2: an old line keeps the numbers it had) and keep the
+extra-element outcome. A recorded status that differs from the production rule of its version
+gives exit 1 with the count ("recorded A differs from recomputed A").
 Per rule it prints the positive MATCH share (lines with a kind; UNAVAILABLE counts against), the
 false MATCH count on `different`, the NEEDS_REVIEW share and the line count; shares have one
 decimal, rounded half up; never a line's content. A `check_codes_error` line is skipped and
 counted separately; a class letter that contradicts its outcome/evidence/fine is counted and
-gives exit 1, like an unparsable line or a recorded A that differs.
+gives exit 1, like an unparsable line or a recorded A that differs (`H` is consistent only with
+evidence NONE in both orders, and only on a v=3 line).
 
 ### Durable `codes.log` (WP-UX-05, D-9)
 
 A redeploy recreates the container and `docker logs` restarts, so `app/codes_log.py` (a
 `logging.Handler` attached in `app/bot.py`, nothing changed in `vision_compare.py`) appends the
 two code kinds to `DATA_DIR/codes.log` (default `/data/codes.log`):
-`<YYYY-MM-DD UTC> check_codes v=2 a=<STATUS> n=<N> codes=<compact>` and
+`<YYYY-MM-DD UTC> check_codes v=3 a=<STATUS> n=<N> codes=<compact>` and
 `<YYYY-MM-DD UTC> verdict_feedback a=<MATCH|MISMATCH|NEEDS_REVIEW> diff=<color|size|logo|model|other>`.
 Date only, no time of day. A record is written only when its message is exactly one of these
-formats (`check_codes` v=1 and v=2 are both accepted and also parsed with the recompute parser, so a forged line is dropped);
+formats (`check_codes` v=1, v=2 and v=3 are accepted and also parsed with the recompute parser, so a forged line is dropped);
 every other record (`vision_call`, `check_done`, free text, an id) is dropped.
 
 - File: created 0600, appended with `O_APPEND`, one line per record. A write failure logs
@@ -319,8 +381,11 @@ Repairs before validation (D-20), logged as `vision_answer_fixed stage=<stage> r
 
 - `ROI_CLAMPED`: a box with x+w > 1000 or y+h > 1000 (x, y in [0, 999], w, h >= 1) gets w = min(w, 1000-x), h = min(h, 1000-y) in `app/vision_core.py` before T2 validation (inventory `reference_roi`; compare `reference_roi`, `candidate_roi`, unmapped `candidate_roi`). x or y outside the frame, or an area < 100 after clamping, is rejected by T2 as before. The clamped inventory is what is hashed and sent to the compare calls. A clamped reference box is smaller, so it may cross `FINE_ROI_AREA`: that only changes the reason label of an attribute already under review (`fine_detail_unverified`), never the status.
 - `TRAILING_TAIL`: `extract_answer` parses the first complete JSON object; a tail made only of whitespace and `}` `]` backtick is accepted. Any other tail stays `NOT_JSON`.
+- `VIEW_DEFAULTED` (WP-CONTROLS-04, compare stages only, `n` = results): a compare result without a valid `candidate_view` was read as `IN_VIEW`. Not a format problem of the T2 answer; it shows a model that ignores the new field (every detail then stays comparable, as before D-10).
 
-The controls table also prints `repaired answers by stage x rule:` with these two counts (once per call).
+- `VIEW_VERDICT_FIXED` and `VIEW_ROI_FILLED` (WP-CONTROLS-04 REVISE 2, compare stages only, `n` = results): repairs of a result whose `candidate_view` is exactly `OUT_OF_VIEW`, made after the view is popped and before the clamp and T2 validation. For a detail the candidate cannot show, the model sometimes answers MATCH with evidence NONE or gives no `candidate_roi`; T2 refuses both and the check ended UNAVAILABLE. (a) `MATCH` + `NONE` becomes `MISMATCH` + `NONE` (the prompt's own convention for a hidden detail); only this exact pair. (b) Then, with evidence `NONE` and a `candidate_roi` that is not four integers, the box becomes the result's `reference_roi` when that is four integers, else `[0, 0, 1000, 1000]`. Never for `IN_VIEW`, never for PARTIAL or DIRECT evidence, never `reference_roi`. A repaired result has evidence NONE, so it can only end as `not_visible` or `out_of_view`, never confirmed.
+
+The controls table also prints `repaired answers by stage x rule:` with these five counts (once per call).
 
 | Rule | Meaning |
 |------|---------|
@@ -447,7 +512,7 @@ is a real ceiling only if one call cannot cost more. The constants and their ari
   planning bound from public rules, not measured on this model: the `usage_prompt` numbers of
   the `vision_call` lines show the real count.
 - Text: at most 6,000 UTF-8 bytes of prompt per request (`PROMPT_TOO_LONG` otherwise; today's
-  largest is about 4,500), at most two images; one token covers at least one byte.
+  largest is about 5,200 since WP-CONTROLS-04), at most two images; one token covers at least one byte.
 - Worst case of one call: (2 x 3,096 + 6,000 + 300 overhead) x 0.75 / 1e6 + 2,800 x 3.75 / 1e6
   = 0.019869 USD, within the 0.02 hold.
 
@@ -515,6 +580,9 @@ per stage). `tests/test_image_layout.py` rebuilds `/app` from the Dockerfile's `
 lines and imports the chain there.
 `tests/test_vision_controls_codes.py` and `tests/test_recompute.py` cover the per-attribute codes and the recompute (WP-CONTROLS-01);
 `tests/test_vision_controls_flag.py` covers the text/logo/count flag, code record v=2 and rule B (WP-CONTROLS-02).
+`tests/test_out_of_view.py` covers `candidate_view`, the out_of_view class, rule A', the notes, the owner's case of 11.10 and
+the comparison with rule A on random answers; `tests/test_recompute_v3.py` the v=3 record in the recompute;
+`tests/test_vision_controls_view.py` the controls run (WP-CONTROLS-04).
 `tests/test_call_ceiling.py` covers the per-call ceiling (WP-BOT-12 criterion 4) and
 `tests/test_spend_cap_v2_wiring.py` the spend cap v2 wiring (begin, not_sent, a process
 killed between begin and record, v1 ledger, orphan settle, settle closing the reservation).

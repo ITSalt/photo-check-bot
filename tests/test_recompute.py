@@ -103,7 +103,7 @@ class ReportTests(unittest.TestCase):
                  "unrelated log line"]
         out = "\n".join(recompute.report(recompute.recompute(lines)))
         self.assertIn("lines=6", out)
-        self.assertIn("rule B: n/a (no check_codes v=2 lines)", out)
+        self.assertIn("rule B: n/a (no check_codes v=2 or v=3 lines)", out)
         self.assertIn("rule A: positive MATCH 33.3% (runs=3) false MATCH on negatives 1 NEEDS_REVIEW 40.0% (checks=5)", out)
 
     def test_bot_log_line_without_kind(self):

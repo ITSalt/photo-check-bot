@@ -70,7 +70,8 @@ class Clamp(unittest.TestCase):
         self.assertEqual(out["results"][0]["reference_roi"], [903, 100, 97, 400])
         self.assertEqual(out["results"][1]["candidate_roi"], [100, 903, 300, 97])
         self.assertEqual(out["unmapped_candidate_elements"][0]["candidate_roi"], [950, 950, 50, 50])
-        self.assertEqual(fixes, [("ROI_CLAMPED", 3)])
+        # a bare T2 answer has no candidate_view: read as IN_VIEW and counted (WP-CONTROLS-04)
+        self.assertEqual(fixes, [("VIEW_DEFAULTED", len(INV)), ("ROI_CLAMPED", 3)])
 
     def test_compare_still_rejected(self):
         v = vision_core.parse_inventory(chat({"attributes": INV}))
