@@ -76,6 +76,17 @@ class BotTextsTest(unittest.TestCase):
             for key in ("reminder_real", "reminder_generated"):
                 self.assertIn("{minutes}", texts[key], f"{lang}.{key}")
 
+    def test_ask_real_same_side_hint(self):
+        # WP-UX-08, D-14: shoot the same side and the same way as the AI photo; /privacy stays last
+        ru = "Снимите вещь с той же стороны и в том же виде, что на ИИ-фото."
+        en = "Show the item from the same side and in the same way as on the AI photo."
+        self.assertIn("пришлите фото настоящей вещи. " + ru, self.t["ru"]["ask_real"])
+        self.assertIn("send a photo of the real item. " + en, self.t["en"]["ask_real"])
+        self.assertTrue(self.t["ru"]["ask_real"].endswith("/privacy"))
+        self.assertTrue(self.t["en"]["ask_real"].endswith("/privacy"))
+        self.assertNotIn(ru, self.t["ru"]["ask_generated_after_real"])
+        self.assertNotIn(en, self.t["en"]["ask_generated_after_real"])
+
 
 if __name__ == "__main__":
     unittest.main()
