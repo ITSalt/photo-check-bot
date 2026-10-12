@@ -11,7 +11,7 @@ PATH = pathlib.Path(__file__).resolve().parent.parent / "app" / "bot_texts.json"
 LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1000, "fallback": 300,
           # photo check replies (app/photo_checks.py, WP-BOT-05)
           "welcome_checks": 1000, "privacy": 600, "ask_generated": 300, "ask_real": 300, "expired": 300,
-          "cancelled": 300, "unsupported": 300, "busy": 300, "MATCH": 300, "MISMATCH": 300,
+          "cancelled": 300, "unsupported": 300, "busy": 300, "MATCH": 200, "MISMATCH": 300,
           "NEEDS_REVIEW": 400, "UNAVAILABLE": 300, "limit_reached": 300, "free_used_up": 400,
           "uncharged_limit": 300,
           # image refused before any provider call (WP-BOT-12 4b)
@@ -56,6 +56,15 @@ class BotTextsTest(unittest.TestCase):
         self.assertIn("and anonymised check codes not linked to you", self.t["en"]["privacy"])
         for lang in ("ru", "en"):
             self.assertIn("90", self.t[lang]["privacy"])
+
+    def test_match_states_small_detail_limit(self):
+        # WP-UX-07, D-12 c: MATCH says the bot can miss small details
+        self.assertIn("Мелкие детали (заклёпки, кнопки, маленький логотип) бот может не заметить, сверьте их сами.",
+                      self.t["ru"]["MATCH"])
+        self.assertIn("The bot can miss small details (rivets, studs, a small logo), so check those yourself.",
+                      self.t["en"]["MATCH"])
+        self.assertIn("Это не гарантия", self.t["ru"]["MATCH"])
+        self.assertIn("does not guarantee", self.t["en"]["MATCH"])
 
     def test_two_step_wording(self):
         for lang, texts in self.t.items():
