@@ -28,8 +28,12 @@ _REQUIRED = ("VISION_BASE_URL", "VISION_MODEL", "VISION_HOST_ALLOWLIST", "VISION
 # WP-CONTROLS-04: a compare result without a valid candidate_view was read as IN_VIEW
 # (app/vision_core.py _pop_views). A repair like the two in answer_rules.FIXES, counted per result.
 VIEW_DEFAULTED = "VIEW_DEFAULTED"
-ANSWER_FIXES = FIXES + (VIEW_DEFAULTED,)
-_COUNTED_FIXES = ("ROI_CLAMPED", VIEW_DEFAULTED)
+# REVISE 2: repairs of an OUT_OF_VIEW result (app/vision_core.py _repair_out_of_view).
+VIEW_VERDICT_FIXED = "VIEW_VERDICT_FIXED"
+VIEW_ROI_FILLED = "VIEW_ROI_FILLED"
+VIEW_FIXES = (VIEW_DEFAULTED, VIEW_VERDICT_FIXED, VIEW_ROI_FILLED)
+ANSWER_FIXES = FIXES + VIEW_FIXES
+_COUNTED_FIXES = ("ROI_CLAMPED",) + VIEW_FIXES
 
 
 class VisionConfigError(ValueError):

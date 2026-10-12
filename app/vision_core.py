@@ -177,6 +177,44 @@ def _pop_views(results):
     return views, defaulted
 
 
+VIEW_VERDICT_FIXED = "VIEW_VERDICT_FIXED"   # fix code: OUT_OF_VIEW + MATCH + NONE read as MISMATCH + NONE
+VIEW_ROI_FILLED = "VIEW_ROI_FILLED"         # fix code: OUT_OF_VIEW + NONE without a usable candidate_roi
+FULL_FRAME = [0, 0, 1000, 1000]
+
+
+def _four_ints(roi):
+    return (isinstance(roi, list) and len(roi) == 4
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in roi))
+
+
+def _repair_out_of_view(results, views):
+    """Repairs for a result whose view is exactly OUT_OF_VIEW (REVISE 2) -> (verdicts fixed, boxes filled).
+
+    For a detail the candidate cannot show, the model sometimes answers MATCH with evidence
+    NONE, or gives no candidate_roi; T2 refuses both and the whole check was lost.
+    (a) MATCH + NONE -> MISMATCH + NONE, the prompt's own convention for a hidden detail. Only
+        this exact pair; every other pair is left for T2.
+    (b) then, with evidence NONE and a candidate_roi that is not four integers: the result's
+        reference_roi when that is four integers, else the full frame. reference_roi itself is
+        never touched.
+    Neither applies to IN_VIEW or to PARTIAL / DIRECT evidence. A repaired result has evidence
+    NONE, so it can only become not_visible or out_of_view, never confirmed."""
+    verdicts = boxes = 0
+    if not isinstance(results, list):
+        return verdicts, boxes
+    for item, view in zip(results, views):
+        if view != OUT_OF_VIEW or not isinstance(item, dict) or item.get("evidence_quality") != "NONE":
+            continue
+        if item.get("verdict") == "MATCH":
+            item["verdict"] = "MISMATCH"
+            verdicts += 1
+        if not _four_ints(item.get("candidate_roi")):
+            reference = item.get("reference_roi")
+            item["candidate_roi"] = list(reference) if _four_ints(reference) else list(FULL_FRAME)
+            boxes += 1
+    return verdicts, boxes
+
+
 def view_of(response, attribute_id):
     """The candidate_view kept beside a parsed compare response; IN_VIEW when there is none."""
     views = response.get(VIEW_KEY) if isinstance(response, dict) else None
@@ -192,6 +230,9 @@ def parse_compare(body, validated, fixes=None):
     answer = extract_answer(body, fixes)
     views, defaulted = _pop_views(answer.get("results"))
     _note(fixes, VIEW_DEFAULTED, defaulted)
+    verdicts, boxes = _repair_out_of_view(answer.get("results"), views)
+    _note(fixes, VIEW_VERDICT_FIXED, verdicts)
+    _note(fixes, VIEW_ROI_FILLED, boxes)
     _note(fixes, "ROI_CLAMPED",
           _clamp_list(answer.get("results"), ("reference_roi", "candidate_roi"))
           + _clamp_list(answer.get("unmapped_candidate_elements"), ("candidate_roi",)))

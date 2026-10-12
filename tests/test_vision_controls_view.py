@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from app import recompute, vision_compare, vision_controls
+from app import recompute, vision_compare, vision_controls, vision_core
 from app.answer_rules import FIXES, RejectTally
 from tests.test_out_of_view import HIDDEN, both, inventory
 from tests.test_t4_vision import ENV, JPEG, FakeModel
@@ -51,6 +51,9 @@ class TallyTests(unittest.TestCase):
         tally.add("inventory", "FIXED", MARK)                  # an unknown fix stays OTHER
         tally.add(MARK + " stage", "FIXED", "VIEW_DEFAULTED")   # a stage outside the alphabet
         tally.add("compare_a", "BAD_COMPARE", "VIEW_DEFAULTED")   # not a reject rule: OTHER
+        for _ in range(3):
+            tally.add("compare_b", "FIXED", "VIEW_VERDICT_FIXED")
+        tally.add("compare_a", "FIXED", "VIEW_ROI_FILLED")
         text = "\n".join(tally.lines())
         self.assertIn("  stage=compare_a rule=VIEW_DEFAULTED n=2", text)
         self.assertIn("  stage=compare_b rule=VIEW_DEFAULTED n=1", text)
@@ -58,6 +61,8 @@ class TallyTests(unittest.TestCase):
         self.assertIn("  stage=inventory rule=OTHER n=1", text)
         self.assertIn("  stage=unknown rule=VIEW_DEFAULTED n=1", text)
         self.assertIn("  stage=compare_a rule=OTHER n=1", text)
+        self.assertIn("  stage=compare_b rule=VIEW_VERDICT_FIXED n=3", text)
+        self.assertIn("  stage=compare_a rule=VIEW_ROI_FILLED n=1", text)
         self.assertNotIn(MARK, text)
 
     def test_other_counts_are_the_base_tally(self):
@@ -67,7 +72,10 @@ class TallyTests(unittest.TestCase):
             ours.add(*args)
             base.add(*args)
         self.assertEqual(ours.lines(), base.lines())
-        self.assertEqual(vision_compare.ANSWER_FIXES, FIXES + ("VIEW_DEFAULTED",))
+        self.assertEqual(vision_compare.ANSWER_FIXES,
+                         FIXES + ("VIEW_DEFAULTED", "VIEW_VERDICT_FIXED", "VIEW_ROI_FILLED"))
+        self.assertEqual((vision_core.VIEW_DEFAULTED, vision_core.VIEW_VERDICT_FIXED, vision_core.VIEW_ROI_FILLED),
+                         vision_compare.VIEW_FIXES)
         self.assertEqual(vision_controls.VIEW_DEFAULTED, "VIEW_DEFAULTED")
 
 
@@ -99,6 +107,20 @@ class ControlsRunTests(unittest.TestCase):
         self.assertEqual((r["lines"], r["bad"], r["a_diff"], r["inconsistent"]), (3, 0, 0, 0))
         self.assertEqual(r["rules"]["A'"]["same"]["MATCH"], 1)
         self.assertEqual(r["rules"]["A"]["same"]["NEEDS_REVIEW"], 1)
+
+    def test_the_table_counts_the_out_of_view_repairs(self):
+        inv = inventory(4, logo_at=3)
+
+        def broken(index, answer):
+            answer["results"][3].update(candidate_view="OUT_OF_VIEW", verdict="MATCH", evidence_quality="NONE",
+                                        candidate_roi=None)
+        code, out, text = run_main([{"kind": "same", "ref": "a"}], [FakeModel(inventory=inv, mutate=broken)])
+        self.assertEqual(text.splitlines(),
+                         ["kind=same check_codes v=3 a=MATCH n=4 codes=1MDD001C,2MDD001C,3MDD001C,4NNN110H;n"])
+        for stage in ("compare_a", "compare_b"):
+            self.assertIn("  stage=%s rule=VIEW_VERDICT_FIXED n=1" % stage, out)
+            self.assertIn("  stage=%s rule=VIEW_ROI_FILLED n=1" % stage, out)
+        self.assertIn("rejects by stage x rule: none", out)
 
     def test_a_false_match_on_a_negative_still_fails_the_run(self):
         # a different product whose only differing detail is "out of view": MATCH on a negative row

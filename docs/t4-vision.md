@@ -383,7 +383,9 @@ Repairs before validation (D-20), logged as `vision_answer_fixed stage=<stage> r
 - `TRAILING_TAIL`: `extract_answer` parses the first complete JSON object; a tail made only of whitespace and `}` `]` backtick is accepted. Any other tail stays `NOT_JSON`.
 - `VIEW_DEFAULTED` (WP-CONTROLS-04, compare stages only, `n` = results): a compare result without a valid `candidate_view` was read as `IN_VIEW`. Not a format problem of the T2 answer; it shows a model that ignores the new field (every detail then stays comparable, as before D-10).
 
-The controls table also prints `repaired answers by stage x rule:` with these three counts (once per call).
+- `VIEW_VERDICT_FIXED` and `VIEW_ROI_FILLED` (WP-CONTROLS-04 REVISE 2, compare stages only, `n` = results): repairs of a result whose `candidate_view` is exactly `OUT_OF_VIEW`, made after the view is popped and before the clamp and T2 validation. For a detail the candidate cannot show, the model sometimes answers MATCH with evidence NONE or gives no `candidate_roi`; T2 refuses both and the check ended UNAVAILABLE. (a) `MATCH` + `NONE` becomes `MISMATCH` + `NONE` (the prompt's own convention for a hidden detail); only this exact pair. (b) Then, with evidence `NONE` and a `candidate_roi` that is not four integers, the box becomes the result's `reference_roi` when that is four integers, else `[0, 0, 1000, 1000]`. Never for `IN_VIEW`, never for PARTIAL or DIRECT evidence, never `reference_roi`. A repaired result has evidence NONE, so it can only end as `not_visible` or `out_of_view`, never confirmed.
+
+The controls table also prints `repaired answers by stage x rule:` with these five counts (once per call).
 
 | Rule | Meaning |
 |------|---------|

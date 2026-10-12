@@ -426,6 +426,240 @@ class NotesTests(unittest.TestCase):
         self.assertEqual(text, MESSAGES["MATCH"] + " " + SKIP_RU + "логотип.")
 
 
+class RepairTests(unittest.TestCase):
+    """REVISE 2: for a result whose view is exactly OUT_OF_VIEW, MATCH + NONE is read as
+    MISMATCH + NONE and a missing candidate_roi is filled, so the check completes instead of
+    ending UNAVAILABLE. Nothing else is repaired, and a repaired result is never confirmed."""
+    BAD_BOXES = (None, [], [1, 2, 3], [1, 2, 3, 4, 5], "x", MARK, {"x": 1, "y": 2, "w": 3, "h": 4},
+                 [1.5, 2, 3, 4], [True, 0, 10, 10], ["1", "2", "3", "4"], 7, Ellipsis)
+
+    def setUp(self):
+        self.inv = inventory(4, logo_at=3)
+        self.v = vision_core.parse_inventory(chat({"attributes": self.inv}))
+
+    def raw(self, a3=None, **fields):
+        """One raw compare answer; a3 = (verdict, evidence, view) of the logo, `fields` set on it."""
+        a = compare_answer(self.v["sha256"], {"a3": a3} if a3 else None, attrs=self.inv)
+        for key, value in fields.items():
+            if value is Ellipsis:
+                a["results"][3].pop(key, None)
+            else:
+                a["results"][3][key] = value
+        return a
+
+    @staticmethod
+    def repairs(fixes):
+        """The fix list without VIEW_DEFAULTED (these bare answers carry a view on the logo only)."""
+        return [f for f in fixes if f[0] != "VIEW_DEFAULTED"]
+
+    def parse(self, answer):
+        fixes = []
+        return vision_core.parse_compare(chat(answer), self.v, fixes), self.repairs(fixes)
+
+    def rejected(self, answer):
+        fixes = []
+        with self.assertRaises(AnswerError) as ctx:
+            vision_core.parse_compare(chat(answer), self.v, fixes)
+        return ctx.exception.rule, self.repairs(fixes)
+
+    def assess(self, first, second):
+        return vision_core.assess(self.v, self.parse(first)[0], self.parse(second)[0])
+
+    def test_a_match_with_no_evidence_out_of_view_becomes_mismatch(self):
+        out, fixes = self.parse(self.raw(("MATCH", "NONE", OUT)))
+        self.assertEqual(fixes, [("VIEW_VERDICT_FIXED", 1)])
+        self.assertEqual((out["results"][3]["verdict"], out["results"][3]["evidence_quality"]), ("MISMATCH", "NONE"))
+        self.assertEqual(out["candidate_view"]["a3"], OUT)
+        self.assertEqual([r["verdict"] for r in out["results"][:3]], ["MATCH"] * 3)      # the others untouched
+
+    def test_a_both_orders_agree_is_out_of_view_one_order_is_not_visible(self):
+        bad = self.raw(("MATCH", "NONE", OUT))
+        r = self.assess(bad, self.raw(("MATCH", "NONE", OUT)))
+        self.assertEqual((r["status"], ids(r["not_compared"]), r["confirmed"]), ("MATCH", ["a3"], ["a0", "a1", "a2"]))
+        r = self.assess(bad, self.raw(HIDDEN))
+        self.assertEqual((r["status"], ids(r["not_compared"])), ("MATCH", ["a3"]))
+        # the other order saw nothing either but calls the place in view: to check, as today
+        for other in (self.raw(("MISMATCH", "NONE", IN)), self.raw(("MISMATCH", "NONE"))):
+            for pair in ((bad, other), (other, bad)):
+                r = self.assess(*pair)
+                self.assertEqual((r["status"], reasons(r), r["not_compared"]),
+                                 ("NEEDS_REVIEW", {"a3": "not_visible"}, []))
+        # the other order confirms it with DIRECT evidence: still never confirmed
+        for pair in ((bad, self.raw()), (self.raw(), bad), (bad, self.raw(("MATCH", "DIRECT", OUT)))):
+            r = self.assess(*pair)
+            self.assertEqual((r["status"], reasons(r), r["confirmed"]),
+                             ("NEEDS_REVIEW", {"a3": "not_visible"}, ["a0", "a1", "a2"]))
+
+    def test_a_only_that_exact_pair(self):
+        # IN_VIEW, no view, a junk view: MATCH + NONE is still T2's reject
+        for view in (IN, None, MARK, "out_of_view"):
+            rule, fixes = self.rejected(self.raw(("MATCH", "NONE", view)))
+            self.assertEqual(rule, "VERDICT_EVIDENCE", view)
+            self.assertNotIn("VIEW_VERDICT_FIXED", dict(fixes))
+        # OUT_OF_VIEW with other pairs: nothing is rewritten
+        for pair, cls in ((("MATCH", "DIRECT"), None), (("MATCH", "PARTIAL"), "fine_detail_unverified"),
+                          (("MISMATCH", "PARTIAL"), "fine_detail_unverified"), (("MISMATCH", "NONE"), None),
+                          (("NOT_VISIBLE_IN_REFERENCE", "NONE"), None)):
+            answer = self.raw(pair + (OUT,))
+            out, fixes = self.parse(answer)
+            self.assertEqual(fixes, [], pair)
+            self.assertEqual((out["results"][3]["verdict"], out["results"][3]["evidence_quality"]), pair)
+            if cls:
+                self.assertEqual(reasons(self.assess(answer, self.raw(pair + (OUT,)))), {"a3": cls})
+        r = self.assess(self.raw(("MATCH", "DIRECT", OUT)), self.raw(("MATCH", "DIRECT", OUT)))
+        self.assertEqual((r["status"], r["confirmed"], r["not_compared"]), ("MATCH", ["a0", "a1", "a2", "a3"], []))
+        rule, fixes = self.rejected(self.raw(("NOT_VISIBLE_IN_REFERENCE", "DIRECT", OUT)))
+        self.assertEqual((rule, fixes), ("VERDICT_EVIDENCE", []))
+
+    def test_b_a_missing_box_is_filled_from_the_reference_box(self):
+        reference = self.inv[3]["reference_roi"]
+        for box in self.BAD_BOXES:
+            with self.subTest(box=box):
+                out, fixes = self.parse(self.raw(HIDDEN, candidate_roi=box))
+                self.assertEqual(fixes, [("VIEW_ROI_FILLED", 1)])
+                self.assertEqual(out["results"][3]["candidate_roi"], reference)
+                self.assertEqual(out["results"][3]["reference_roi"], reference)
+                self.assertNotIn(MARK, repr(out) + repr(fixes))
+        r = self.assess(self.raw(HIDDEN, candidate_roi=None), self.raw(HIDDEN, candidate_roi=None))
+        self.assertEqual((r["status"], ids(r["not_compared"])), ("MATCH", ["a3"]))
+        r = self.assess(self.raw(HIDDEN, candidate_roi=None), self.raw(("MISMATCH", "NONE", IN)))
+        self.assertEqual((r["status"], reasons(r), r["not_compared"]), ("NEEDS_REVIEW", {"a3": "not_visible"}, []))
+
+    def test_b_the_full_frame_when_there_is_no_reference_box(self):
+        nv = ("NOT_VISIBLE_IN_REFERENCE", "NONE", OUT)             # reference_roi is null for this verdict
+        out, fixes = self.parse(self.raw(nv, candidate_roi=None))
+        self.assertEqual(fixes, [("VIEW_ROI_FILLED", 1)])
+        self.assertEqual((out["results"][3]["candidate_roi"], out["results"][3]["reference_roi"]),
+                         ([0, 0, 1000, 1000], None))
+        r = self.assess(self.raw(nv, candidate_roi=None), self.raw(nv, candidate_roi=None))
+        self.assertEqual((r["status"], ids(r["not_compared"])), ("MATCH", ["a3"]))
+
+    def test_b_never_touches_the_reference_box(self):
+        # a broken reference_roi is still T2's reject; the candidate box got the full frame meanwhile
+        for reference in (None, [1, 2, 3], "x"):
+            rule, fixes = self.rejected(self.raw(HIDDEN, candidate_roi=None, reference_roi=reference))
+            self.assertEqual((rule, fixes), ("ROI_SHAPE", [("VIEW_ROI_FILLED", 1)]), reference)
+        rule, fixes = self.rejected(self.raw(HIDDEN, reference_roi=None))      # candidate box fine: no repair
+        self.assertEqual((rule, fixes), ("ROI_SHAPE", []))
+
+    def test_b_only_for_out_of_view_with_no_evidence(self):
+        for a3 in (("MISMATCH", "NONE", IN), ("MISMATCH", "NONE"), ("MISMATCH", "NONE", MARK),      # not OUT_OF_VIEW
+                   ("MISMATCH", "DIRECT", OUT), ("MATCH", "DIRECT", OUT), ("MATCH", "PARTIAL", OUT),
+                   ("MISMATCH", "PARTIAL", OUT), ("MATCH", "DIRECT", IN)):                         # evidence
+            for box in (None, [], "x"):
+                rule, fixes = self.rejected(self.raw(a3, candidate_roi=box))
+                self.assertEqual((rule, fixes), ("ROI_SHAPE", []), (a3, box))
+
+    def test_b_a_box_of_four_integers_is_left_alone(self):
+        own = [10, 20, 300, 400]
+        out, fixes = self.parse(self.raw(HIDDEN, candidate_roi=own))
+        self.assertEqual((out["results"][3]["candidate_roi"], fixes), (own, []))
+        out, fixes = self.parse(self.raw(HIDDEN, candidate_roi=[900, 900, 300, 300]))     # the clamp's case, not ours
+        self.assertEqual((out["results"][3]["candidate_roi"], fixes), ([900, 900, 100, 100], [("ROI_CLAMPED", 1)]))
+        rule, fixes = self.rejected(self.raw(HIDDEN, candidate_roi=[0, 0, 0, 5]))         # empty box: T2 decides
+        self.assertEqual((rule, fixes), ("ROI_OUT_OF_FRAME", []))
+
+    def test_both_repairs_on_one_result(self):
+        out, fixes = self.parse(self.raw(("MATCH", "NONE", OUT), candidate_roi=None))
+        self.assertEqual(fixes, [("VIEW_VERDICT_FIXED", 1), ("VIEW_ROI_FILLED", 1)])
+        self.assertEqual((out["results"][3]["verdict"], out["results"][3]["candidate_roi"]),
+                         ("MISMATCH", self.inv[3]["reference_roi"]))
+
+    def test_malformed_results_are_left_to_t2(self):
+        for results in (None, "x", [1, None], [[OUT]]):
+            a = self.raw()
+            a["results"] = results
+            with self.subTest(results=results), self.assertRaises(AnswerError):
+                vision_core.parse_compare(chat(a), self.v)
+        a = self.raw(("MATCH", "NONE", OUT))
+        a["results"][3]["evidence_quality"] = ["NONE"]            # not the enum string: no repair
+        rule, fixes = self.rejected(a)
+        self.assertEqual((rule, fixes), ("VERDICT_EVIDENCE", []))
+
+    def test_through_the_chain_the_check_completes_and_is_counted(self):
+        def broken(index, answer):                                # what the controls saw on Set B
+            item = answer["results"][3]
+            item.update(candidate_view=OUT, verdict="MATCH", evidence_quality="NONE", candidate_roi=None,
+                        observation=MARK)
+        tally = []
+        compare = vision_compare.compare_from_env(ENV, transport=FakeModel(inventory=self.inv, mutate=broken),
+                                                  on_reject=lambda *a: tally.append(a))
+        with self.assertLogs("vision", "INFO") as logs:
+            result = compare(JPEG, PNG)
+        self.assertEqual((result["status"], ids(result["not_compared"]), result["confirmed"]),
+                         ("MATCH", ["a3"], ["a0", "a1", "a2"]))
+        text = "\n".join(logs.output)
+        for stage in ("compare_a", "compare_b"):
+            self.assertIn("vision_answer_fixed stage=%s rule=VIEW_VERDICT_FIXED n=1" % stage, text)
+            self.assertIn("vision_answer_fixed stage=%s rule=VIEW_ROI_FILLED n=1" % stage, text)
+            self.assertIn((stage, "FIXED", "VIEW_VERDICT_FIXED"), tally)
+            self.assertIn((stage, "FIXED", "VIEW_ROI_FILLED"), tally)
+        self.assertIn("check_codes v=3 a=MATCH n=4 codes=1MDD001C,2MDD001C,3MDD001C,4NNN110H;n", text)
+        self.assertNotIn("vision_bad_answer", text)
+        self.assertNotIn(MARK, text + repr(result))
+        self.assertEqual(format_notes(result), SKIP_RU + "логотип на изнанке.")
+
+    def test_the_same_broken_answer_in_view_is_still_unavailable(self):
+        def broken(index, answer):
+            answer["results"][3].update(candidate_view=IN, verdict="MATCH", evidence_quality="NONE")
+        compare = vision_compare.compare_from_env(ENV, transport=FakeModel(inventory=self.inv, mutate=broken))
+        with self.assertLogs("vision", "WARNING") as logs:
+            self.assertEqual(compare(JPEG, PNG), {"status": "UNAVAILABLE"})
+        self.assertIn("rule=VERDICT_EVIDENCE path=results[3]", logs.output[0])
+
+    def test_random_broken_answers_a_repaired_result_is_never_confirmed(self):
+        """Random answers with the two defects planted at random: an answer without a defect on an
+        OUT_OF_VIEW + NONE result parses exactly as before; whatever was repaired never counts as
+        confirmed and never turns into a difference."""
+        rng = random.Random(12)
+        seen = {"completed": 0, "rejected": 0, "hidden": 0}
+        hidden_pairs = [("MATCH", "NONE"), ("MISMATCH", "NONE"), ("NOT_VISIBLE_IN_REFERENCE", "NONE")]
+        for _ in range(1500):
+            n = rng.randint(3, 8)
+            inv = inventory(n)
+            v = vision_core.parse_inventory(chat({"attributes": inv}))
+            answers, repaired, must_reject = [], set(), False
+            for _order in range(2):
+                a = compare_answer(v["sha256"], attrs=inv)
+                for item in a["results"]:
+                    view = rng.choice((IN, OUT, OUT, None))
+                    if view == OUT and rng.random() < 0.4:      # a detail the model calls hidden
+                        verdict, evidence = rng.choice(hidden_pairs)
+                    elif rng.random() < 0.02:                   # the forbidden pair anywhere
+                        verdict, evidence = "MATCH", "NONE"
+                    else:
+                        verdict, evidence = rng.choice(PAIRS) if rng.random() < 0.3 else PAIRS[0]
+                    item.update(verdict=verdict, evidence_quality=evidence,
+                                reference_roi=None if verdict == "NOT_VISIBLE_IN_REFERENCE" else item["reference_roi"])
+                    if view:
+                        item["candidate_view"] = view
+                    fixable = view == OUT and evidence == "NONE"
+                    no_box = rng.random() < (0.5 if fixable else 0.02)
+                    if no_box:
+                        item["candidate_roi"] = rng.choice((None, [], "x"))
+                    if (verdict, evidence) == ("MATCH", "NONE") or no_box:
+                        if fixable:
+                            repaired.add(item["attribute_id"])
+                        else:
+                            must_reject = True
+                answers.append(a)
+            try:
+                first, second = [vision_core.parse_compare(chat(a), v) for a in answers]
+            except AnswerError:
+                self.assertTrue(must_reject)               # a repair never causes a reject of its own
+                seen["rejected"] += 1
+                continue
+            self.assertFalse(must_reject)                  # a defect outside OUT_OF_VIEW + NONE is never repaired
+            result = vision_core.assess(v, first, second)
+            self.assertFalse(repaired & set(result["confirmed"]))
+            self.assertFalse(repaired & set(ids(result["differs"])))
+            for aid in repaired:
+                self.assertIn(aid, ids(result["not_compared"]) + ids(result["to_check"]))
+            seen["completed"] += bool(repaired)
+            seen["hidden"] += bool(repaired & set(ids(result["not_compared"])))
+        self.assertGreater(min(seen.values()), 20, seen)
+
+
 class PrivacyTests(unittest.TestCase):
     """Criterion 3: a view outside the enum never reaches a log, the record or the notes."""
 

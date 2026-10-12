@@ -22,7 +22,8 @@ for `python3 -m app.recompute FILE`. No image path, claim, label or model text i
 After the results it prints the format-reject counts by stage x rule (fixed rule codes from
 app.answer_rules, only for the real provider path; none when `compare` is injected); the
 repaired-answers part of that table also counts VIEW_DEFAULTED (a compare answer where at least
-one result had no valid candidate_view and was read as IN_VIEW, WP-CONTROLS-04).
+one result had no valid candidate_view and was read as IN_VIEW, WP-CONTROLS-04) and the two
+repairs of an OUT_OF_VIEW result, VIEW_VERDICT_FIXED and VIEW_ROI_FILLED.
 Prints nothing but counts, kinds and fixed codes: no file paths, bytes or model text.
 """
 import json
@@ -32,7 +33,7 @@ import sys
 
 from app import controls_gate
 from app.answer_rules import RejectTally
-from app.vision_compare import VIEW_DEFAULTED
+from app.vision_compare import VIEW_DEFAULTED, VIEW_FIXES
 
 STATUSES = ("MATCH", "MISMATCH", "NEEDS_REVIEW", "UNAVAILABLE")
 POSITIVE = ("same", "recrop")
@@ -41,12 +42,12 @@ THRESHOLD = 0.90
 
 
 class ControlsTally(RejectTally):
-    """RejectTally that also counts the VIEW_DEFAULTED repair (once per call, like the others)."""
+    """RejectTally that also counts the candidate_view repairs (once per call, like the others)."""
 
     def add(self, stage, code, rule):
-        if code == "FIXED" and rule == VIEW_DEFAULTED:
+        if code == "FIXED" and rule in VIEW_FIXES:
             stage = stage if re.fullmatch(r"[a-z_]{1,20}", str(stage)) else "unknown"
-            self.fixed[(stage, VIEW_DEFAULTED)] = self.fixed.get((stage, VIEW_DEFAULTED), 0) + 1
+            self.fixed[(stage, rule)] = self.fixed.get((stage, rule), 0) + 1
             return
         super().add(stage, code, rule)
 
