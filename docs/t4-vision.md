@@ -198,6 +198,93 @@ UNAVAILABLE counts against both sides. It prints one line per side and `CONTROLS
 or `CONTROLS FAIL: <sides>` (exit 1); sides are `positive`, `negative` and `false_match` (any MATCH on `different` rows fails the gate, even above 90%). A `recrop` row whose `cand` equals `ref` is refused (exit 2)
 in both modes. The output never contains paths, URLs or model text.
 
+### Zoom check for fine details: an experiment (`--zoom`, WP-CONTROLS-05, D-12 a)
+
+Measured, not shipped. The bot does not run it and the production rule A' is unchanged; the
+code is `app/vision_controls_zoom.py`, used only by the controls tool. It answers one question
+for the spend decision of D-12: what a second, closer look at small details would change and
+what it would cost.
+
+```
+VISION_...=... python3 -m app.vision_controls manifest.json --repeats 3 --zoom ask  --codes ask.codes
+VISION_...=... python3 -m app.vision_controls manifest.json --repeats 3 --zoom crop --codes crop.codes
+VISION_...=... python3 -m app.vision_controls manifest.json --repeats 3 --zoom both --codes zoom.codes
+```
+
+After every completed check the tool makes extra provider calls for the attributes that are
+**fine** (reference box under 2% of the frame, the fine bit of the code record) **and
+confirmed**:
+
+- `ask`: one extra call per check. The same two photos and a short prompt listing only those
+  attributes with their boxes (the reference box of the inventory, and the candidate box: the
+  union of the two orders' boxes).
+- `crop`: one extra call per attribute, smallest reference box first, at most 4 per check (the
+  attributes beyond the cap are not asked and stay as they were). Each call carries two images:
+  the reference cut at its box and the candidate cut at its box, both padded by half the box's
+  longer side on every side, made square (at least 64 px) and scaled so that the longer side is
+  768 px. Needs Pillow on the machine that runs the controls (`pip install Pillow`); it is not in
+  the image, the Dockerfile or CI. Before any provider call the tool cuts one test crop: without
+  Pillow, or with one that cannot cut, it prints one line and exits 2 with zero calls. EXIF
+  rotation is not applied (the boxes are the model's, over the picture as sent).
+- `both`: both modes after the same check, so the two are compared on the same three base
+  answers and the base check is paid once.
+
+Per attribute the model answers `PRESENT_SAME`, `ABSENT_OR_DIFFERENT` or `CANNOT_TELL` (strict
+JSON, small `max_tokens`). The rule that is measured: `ABSENT_OR_DIFFERENT` turns the attribute
+into "differs" (so the check would be MISMATCH), `CANNOT_TELL` into "to check" (NEEDS_REVIEW
+unless something differs), `PRESENT_SAME` leaves it confirmed; then rule A' is applied again,
+extra-element outcome kept. A zoom answer can only move a fine confirmed attribute to "to check"
+or "differs", never anything the other way, so the status with zoom is never better than without.
+A bad zoom answer (provider failure, cut-off, not JSON, a missing, repeated or unknown value)
+leaves the attribute as it was and is counted. A check that is already MISMATCH is not zoomed
+(nothing could change), nor is a check with no fine confirmed attribute; an UNAVAILABLE run has
+nothing to zoom. `--zoom` cannot be combined with `--gate`.
+
+The usual lines of the run (shares per kind, `false MATCH on negatives`, the exit code, the
+`check_codes` lines) are the production ones, untouched. After them, per mode:
+
+| Line | How to read it |
+|---|---|
+| `<kind> runs=N MATCH=a->b MISMATCH=a->b NEEDS_REVIEW=a->b UNAVAILABLE=a->b` | runs of that kind (and pooled `positive`) by status: `a` without zoom, `b` with it |
+| `false MATCH on negatives: a -> b` | `different` runs judged MATCH without and with zoom: the blind spot the zoom is meant to close |
+| `positive MATCH share: x% -> y%` | the price on honest pairs: the share the zoom turns into NEEDS_REVIEW or MISMATCH is `x - y` |
+| `row=<i> kind=<kind> runs=<n> MATCH=a->b` | the same per manifest row (0-based index, repeats pooled): false MATCH per pair |
+| `answers: PRESENT_SAME=.. ABSENT_OR_DIFFERENT=.. CANNOT_TELL=.. bad=.. over_cap=..` | asked attributes by answer; `bad` kept their class; `over_cap` were not asked (`crop` only) |
+| `zoom errors by code:` | fixed codes: provider (`TIMEOUT`, `HTTP_ERROR`, ...), answer (`CUT_OFF`, `NOT_JSON`, ...), `BAD_ITEM` (one attribute without a valid answer), not sent (`PROMPT_TOO_LONG`, `CROP_FAILED`, `CROP_SIZE`), `ZOOM_FAILED` |
+| `extra calls per check, <group> (n=..): min p50 p95 max` | zoom calls on top of the three of the check; nearest-rank percentiles |
+| `extra cost per check USD, <group> (n=..): p50 p95 max` | the sum of the provider's `usage.cost` of those calls |
+| `zoom calls=.. total cost USD=.. calls without a reported cost=..` | calls without a cost are not in the cost numbers: with any, the cost lines are a lower bound |
+| `worst case of one zoom call: .. USD (within the per-call hold 0.02 USD); at most N call(s) per check = .. USD` | from the constants, see below |
+
+The two groups are `all completed checks` and `checks that are MATCH without zoom`. The second is
+what a production rule that zooms only before saying MATCH would pay.
+
+With `--codes FILE` every completed run also gets one line per mode after its `check_codes` line
+(`app.recompute` skips it):
+
+```
+kind=different zoom_codes v=1 row=3 mode=ask a=MATCH z=MISMATCH calls=1 codes=3S,5A
+```
+
+`a` is the production status, `z` the status with zoom, `codes` the asked attributes as
+`<inventory position><letter>` (`-` when none): `S` PRESENT_SAME, `A` ABSENT_OR_DIFFERENT, `T`
+CANNOT_TELL, `E` bad answer, `K` over the cap. The log gets `zoom_call mode=.. usage_prompt=..
+usage_completion=.. cost=..` per call. Nothing else is written: no claim, box, attribute id, path
+or model text.
+
+Worst case of one zoom call (same pricing basis as the per-call ceiling below; `zoom_payload`
+enforces the text bound and `max_tokens`, `build_crop_request` the crop size):
+
+| Mode | Images | Text bound | `max_tokens` | Worst case of one call | Calls per check | Worst case per check |
+|---|---|---|---|---|---|---|
+| `ask` | 2 x 3096 tokens (the photos) | 4000 bytes | 600 | (6192 + 4000 + 300) x 0.75 / 1e6 + 600 x 3.75 / 1e6 = 0.010119 USD | 1 | 0.010119 USD |
+| `crop` | 2 x 1548 tokens (768 px crops: at most 6 tiles of 258) | 1500 bytes | 200 | (3096 + 1500 + 300) x 0.75 / 1e6 + 200 x 3.75 / 1e6 = 0.004422 USD | at most 4 | 0.017688 USD |
+
+Both are within the 0.02 USD hold of one call, but they are calls on top of the three that the
+0.06 USD hold of a check covers: shipping either mode needs a larger hold per check (one more
+call for `ask`, up to four for `crop`, or one more hold sized for them). That is the decision
+these numbers are for; the controls run itself has no spend cap.
+
 ## Environment
 
 | Variable | Required | Meaning |
@@ -583,6 +670,8 @@ lines and imports the chain there.
 `tests/test_out_of_view.py` covers `candidate_view`, the out_of_view class, rule A', the notes, the owner's case of 11.10 and
 the comparison with rule A on random answers; `tests/test_recompute_v3.py` the v=3 record in the recompute;
 `tests/test_vision_controls_view.py` the controls run (WP-CONTROLS-04).
+`tests/test_vision_controls_zoom.py` covers the zoom experiment (WP-CONTROLS-05): targets, the measured rule, bad answers,
+the crop geometry with a fake imaging library (and the real one where Pillow is installed), the zoom call ceiling.
 `tests/test_call_ceiling.py` covers the per-call ceiling (WP-BOT-12 criterion 4) and
 `tests/test_spend_cap_v2_wiring.py` the spend cap v2 wiring (begin, not_sent, a process
 killed between begin and record, v1 ledger, orphan settle, settle closing the reservation).
