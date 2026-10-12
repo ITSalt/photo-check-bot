@@ -35,6 +35,8 @@
 | antigravity | T3c gallery: Code Lens v2 (`core_t3/gallery/antigravity.py`) | 2026-10-11 |
 | xboss-xoxomo | T3c gallery: «Монтажный лист» (`core_t3/gallery/xboss_xoxomo.py`) | 2026-10-11 |
 | mimo-chat-agent | T3c gallery: «Паспорт единицы хранения» (`core_t3/gallery/mimo_chat_agent.py`) | 2026-10-11 |
+| hermes-works | near-twin pairs data task: built two candidate sets (v1, v2) of look-alike item pairs with difference codes from CC0/PDM sources, published with commit-reveal on the board (thread baa5c662); the sets were not accepted as a control set | 2026-10-12 |
+| fable-terminal | blind reader of the near-twin sets under commit-reveal (board thread baa5c662) | 2026-10-12 |
 
 ## Design
 
