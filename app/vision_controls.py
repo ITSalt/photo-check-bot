@@ -1,6 +1,6 @@
 """Smoke-test controls for the status rule (run by the orchestrator, with a key).
 
-    python3 -m app.vision_controls MANIFEST.json [--repeats 3] [--gate] [--codes FILE]
+    python3 -m app.vision_controls MANIFEST.json [--repeats 3] [--gate] [--codes FILE] [--zoom ask|crop|both]
 
 MANIFEST is a JSON list of {"kind": "same"|"recrop"|"different", "ref": path, "cand": path}:
   same       positive control: the photo against itself (cand may be omitted)
@@ -24,6 +24,14 @@ app.answer_rules, only for the real provider path; none when `compare` is inject
 repaired-answers part of that table also counts VIEW_DEFAULTED (a compare answer where at least
 one result had no valid candidate_view and was read as IN_VIEW, WP-CONTROLS-04) and the two
 repairs of an OUT_OF_VIEW result, VIEW_VERDICT_FIXED and VIEW_ROI_FILLED.
+--zoom MODE (WP-CONTROLS-05, D-12: an experiment, measured and not shipped; not with --gate)
+makes extra provider calls after every completed check for the attributes that are fine AND
+confirmed and prints, per mode, what the status would be with the zoom, the extra calls and
+cost per check and the worst-case cost of one zoom call (app/vision_controls_zoom.py). The
+statuses above, the exit code and the `check_codes` lines stay the production ones; --codes
+FILE gets one more line per completed run and mode: `kind=<kind> zoom_codes v=1 row=<i>
+mode=<mode> a=<STATUS> z=<STATUS with zoom> calls=<n> codes=<pos><S|A|T|E|K>,...`. `crop`
+needs Pillow on this machine (checked before any provider call).
 Prints nothing but counts, kinds and fixed codes: no file paths, bytes or model text.
 """
 import json
@@ -97,7 +105,39 @@ def summarize(tally):
     return out
 
 
-def _main(argv, environ, compare=None, read=None, make=None):
+ZOOM_CHOICES = {"ask": ("ask",), "crop": ("crop",), "both": ("ask", "crop")}
+
+
+def _zoom_compare(modes, make, environ, rejects, record_box, transport=None, imaging=None):
+    """(compare followed by the zoom calls, the Zoom) for --zoom; (None, None) when vision is
+    not configured; (a message, None) when the zoom cannot run here. No provider call is made."""
+    from app import vision_compare, vision_controls_zoom as vz
+    config = vision_compare.load_config(environ)
+    call_provider = vision_compare._default_call_provider()
+    core = vision_compare._default_core()
+    if config is None or call_provider is None or core is None:
+        return None, None
+    if "crop" in modes:
+        try:
+            imaging = imaging or vz.load_imaging()
+            vz.imaging_selftest(imaging)
+        except vz.ZoomSetupError as e:
+            return {"PILLOW_MISSING": "zoom crop needs Pillow on this machine (pip install Pillow); "
+                                      "no provider call was made"}.get(
+                e.args[0], "zoom crop: Pillow cannot cut a test crop; no provider call was made"), None
+    if transport is None:
+        from app.vision_transport import make_transport
+        transport = make_transport(config["base_url"], config["timeout"], host_allowlist=config["allowlist"])
+    recorder = vz.RecordingCore(core)
+    compare = make(environ, transport=transport, core=recorder, on_reject=rejects.add,
+                   on_codes=record_box.append)
+    if compare is None:
+        return None, None
+    zoom = vz.Zoom(modes, recorder, call_provider, transport, environ, config["model"], imaging)
+    return zoom.wrap(compare), zoom
+
+
+def _main(argv, environ, compare=None, read=None, make=None, transport=None, imaging=None):
     repeats, args = 3, list(argv)
     gate = "--gate" in args
     args = [a for a in args if a != "--gate"]
@@ -113,15 +153,31 @@ def _main(argv, environ, compare=None, read=None, make=None):
         i = args.index("--repeats")
         repeats = int(args[i + 1])
         del args[i:i + 2]
+    zoom_modes = None
+    if "--zoom" in args:
+        i = args.index("--zoom")
+        zoom_modes = ZOOM_CHOICES.get(args[i + 1]) if i + 1 < len(args) else None
+        if zoom_modes is None or gate or compare is not None:
+            print("usage: --zoom needs ask, crop or both, and cannot be combined with --gate")
+            return 2
+        del args[i:i + 2]
     if len(args) != 1 or repeats < 1:
-        print("usage: python3 -m app.vision_controls MANIFEST.json [--repeats N] [--gate] [--codes FILE]")
+        print("usage: python3 -m app.vision_controls MANIFEST.json [--repeats N] [--gate] [--codes FILE]"
+              " [--zoom ask|crop|both]")
         return 2
     rejects = ControlsTally()
     record_box = []
+    zoom = None
     if compare is None:
         if make is None:
             from app.vision_compare import compare_from_env as make
-        compare = make(environ, on_reject=rejects.add, on_codes=record_box.append)
+        if zoom_modes is None:
+            compare = make(environ, on_reject=rejects.add, on_codes=record_box.append)
+        else:
+            compare, zoom = _zoom_compare(zoom_modes, make, environ, rejects, record_box, transport, imaging)
+            if isinstance(compare, str):
+                print(compare)
+                return 2
         if compare is None:
             print("vision not configured")
             return 2
@@ -146,13 +202,23 @@ def _main(argv, environ, compare=None, read=None, make=None):
         except OSError:
             print("codes file unusable")   # never the path
             return 2
+    if codes_file is not None or zoom is not None:
+        runs_seen = []
 
         def on_run(kind, status, record):
+            run = zoom.close_run(kind, len(runs_seen) // repeats, status) if zoom is not None else None
+            runs_seen.append(kind)
+            if codes_file is None:
+                return
             if record:
                 from app.vision_core import codes_line   # needs core_t2, like the real chain
                 codes_file.write("kind=%s %s\n" % (kind, codes_line(record)))
             elif status == "UNAVAILABLE":
                 codes_file.write("kind=%s unavailable\n" % kind)
+            if run is not None and run["modes"]:
+                from app.vision_controls_zoom import zoom_codes_line
+                for mode in zoom.modes:
+                    codes_file.write("kind=%s %s\n" % (kind, zoom_codes_line(run, mode)))
             codes_file.flush()
     outcomes = []
     try:
@@ -174,6 +240,9 @@ def _main(argv, environ, compare=None, read=None, make=None):
     false_match = tally["different"]["MATCH"]
     print("false MATCH on negatives: %d" % false_match)
     print(*rejects.lines(), sep="\n")
+    if zoom is not None:
+        from app.vision_controls_zoom import report
+        print(*report(zoom), sep="\n")
     return 1 if result["rule_too_strict"] or false_match else 0
 
 
