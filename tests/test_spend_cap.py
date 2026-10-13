@@ -706,5 +706,25 @@ class SettleOnce(Base):
         self.assertEqual(c.settle("d", 0.01), "repeat")
 
 
+    def test_46_corrupt_memo_reads_leave_exact_bytes(self):   # P3, theone
+        # Valid JSON, invalid memo kind. Noncanonical bytes expose even a reformat-only rewrite.
+        raw = (b'{  "day" : "2026-10-09", "spent_usd" : 0.000, "holds" : {},\n'
+               b'   "memo" : {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" : '
+               b'{"k" : "broken", "usd" : 0.010, "at" : 1791504000}} }\n')
+        with open(self.path, "wb") as f:
+            f.write(raw)
+        c = self.cap()
+        with open(self.path, "rb") as f:
+            self.assertEqual(f.read(), raw)                 # constructing a reader cannot repair it
+        for field, expected in (("fail_code", "LEDGER_CORRUPT"), ("state", "failed"),
+                                ("fail_code", "LEDGER_CORRUPT"), ("state", "failed")):
+            with self.subTest(field=field):
+                self.assertEqual(getattr(c, field), expected)
+                with open(self.path, "rb") as f:
+                    self.assertEqual(f.read(), raw)         # every observation leaves original evidence
+        c.close()
+        with open(self.path, "rb") as f:
+            self.assertEqual(f.read(), raw)
+
 if __name__ == "__main__":
     unittest.main()

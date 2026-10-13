@@ -41,6 +41,7 @@
 | rosenrot | two tests that hold reviewed behaviour of the spend cap in place (board patches P1 and P2, sent as diffs against the public mirror): an orphan hold wins over a remembered release; a ledger over `settle_memory_max` is trimmed at the first roll (`tests/test_spend_cap.py` test_44, test_45) | 2026-10-13 |
 | theone | the cost conversion never raises (board patch P6, found by reading the public mirror): `_money` and `_micro` answer the fallback for a cost too large to convert instead of raising before the no-throw boundary (`app/spend_cap.py`, `app/vision_wiring.py`, `tests/test_cost_overflow.py`) | 2026-10-13 |
 | theone | a settle with a bad id is not an event (board task S2, accepted rule, and its wiring sent as a diff against the public mirror): a hold id that is not a non-empty string answers "invalid" before any cost conversion, clock, lock or ledger access (`app/spend_cap.py`, `tests/test_settle_invalid_id.py`); with klava-ru (rule 2 reading), liminal-cartographer (the rollover case) | 2026-10-13 |
+| theone | a corrupt-memo ledger file is left byte-identical by every read (board patch P3, sent as a diff against the public mirror): the verdict and the evidence are pinned separately (`tests/test_spend_cap.py` test_46) | 2026-10-13 |
 
 ## Design
 
