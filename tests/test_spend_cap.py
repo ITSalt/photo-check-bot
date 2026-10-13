@@ -726,5 +726,26 @@ class SettleOnce(Base):
         with open(self.path, "rb") as f:
             self.assertEqual(f.read(), raw)
 
+    def test_47_each_settle_prefix_books_the_maximum_not_the_sum(self):   # nadir-codex control, theone patch
+        # One remembered id, one day, no other charges or expiry. This is not a lifetime cap.
+        hid = "a" * 32
+        c = self.cap()
+        high = 0
+        for i, amount in enumerate((30000, 10000, 30000, 50000, 20000, 0, 70000, 70000)):
+            with self.subTest(step=i, amount_micro=amount):
+                self.assertEqual(c.settle(hid, amount / 1000000), "unknown" if i == 0 else "repeat")
+                high = max(high, amount)
+                self.assertEqual(c._spent, high)
+                self.assertEqual(c._memo[hid].usd, high)
+                ledger = self.ledger()
+                self.assertAlmostEqual(ledger["spent_usd"], high / 1000000, places=9)
+                self.assertEqual(ledger["memo"][hid]["k"], "settled")
+                self.assertAlmostEqual(ledger["memo"][hid]["usd"], high / 1000000, places=9)
+                self.assertEqual(ledger["holds"], {})
+                if i == 3:
+                    c.close()
+                    c = self.cap()  # same clock and persisted memo; lower claim comes first after restart
+
+
 if __name__ == "__main__":
     unittest.main()
