@@ -678,6 +678,33 @@ class SettleOnce(Base):
         self.assertEqual(c.settle(r2.hold_id, 0.004), "unknown")   # as before: booked, the safe side
         self.assertAlmostEqual(self.spent(), 0.018, places=9)
 
+    def test_44_orphan_hold_that_is_also_remembered_released_is_settled(self):   # P1, rosenrot
+        hid = "h" * 32                                      # a hand-merged ledger: the id is both
+        with open(self.path, "w") as f:
+            json.dump({"day": "2026-10-09", "spent_usd": 0.0,
+                       "holds": {hid: {"day": "2026-10-09", "usd": 0.06, "in_flight": 1, "at": DAY1 + 60}},
+                       "memo": {hid: {"k": "released", "usd": 0.0, "at": DAY1 + 120}}}, f)
+        c = self.cap(0.12)
+        self.assertEqual(c.orphans(), [(hid, "2026-10-09", 0.06)])
+        self.assertEqual(c.settle(hid, 0.05), "settled")    # the hold wins over the memory
+        self.assertAlmostEqual(self.spent(), 0.05, places=9)
+        self.assertEqual(self.ledger()["holds"], {})
+        self.assertEqual(self.ledger()["memo"], {hid: {"k": "settled", "usd": 0.05, "at": DAY1 + 3600}})
+        self.assertEqual(c.settle(hid, 0.05), "repeat")     # and from then on it is settled once
+        self.assertAlmostEqual(self.spent(), 0.05, places=9)
+
+    def test_45_ledger_over_memory_max_is_trimmed_at_the_first_roll(self):   # P2, rosenrot
+        memo = {hid: {"k": "settled", "usd": 0.01, "at": DAY1 + i} for i, hid in enumerate("abcd")}
+        with open(self.path, "w") as f:
+            json.dump({"day": "2026-10-09", "spent_usd": 0.04, "holds": {}, "memo": memo}, f)
+        c = self.cap(settle_memory_max=2)
+        self.assertEqual(c.fail_code, None)                 # reading does not trim and does not write
+        self.assertEqual(sorted(self.ledger()["memo"]), ["a", "b", "c", "d"])
+        self.assertIsNotNone(c.reserve())                   # remembers nothing itself: only _roll trims
+        self.assertEqual(sorted(self.ledger()["memo"]), ["c", "d"])   # the oldest two went first
+        self.assertEqual(c.settle("a", 0.01), "unknown")    # forgotten: booked in full again
+        self.assertEqual(c.settle("d", 0.01), "repeat")
+
 
 if __name__ == "__main__":
     unittest.main()
