@@ -519,10 +519,13 @@ the spend cap sums those. The smoke test's lines replace the assumptions above. 
 
 ## Spend cap
 
-`app/spend_cap.py` (v2.1.1, fable-terminal, D-17) keeps a per-UTC-day ledger in `DATA_DIR`,
-written atomically (file and directory fsync): `{"day", "spent_usd", "holds"}`, where
+`app/spend_cap.py` (v2.1.1, fable-terminal, D-17; settle-once rule by theone, WP-CONTROLS-06)
+keeps a per-UTC-day ledger in `DATA_DIR`,
+written atomically (file and directory fsync): `{"day", "spent_usd", "holds", "memo"}`, where
 `holds` maps a random hold id to `{"day", "usd", "in_flight", "at"}` (`at`: when the hold was
-taken, Unix seconds); no user identifiers. The cap
+taken, Unix seconds) and `memo` maps the id of a hold that is gone to `{"k", "usd", "at"}`
+(`k`: `released`, `expired` or `settled`; `usd`: the highest cost settled for it; `at`: when
+it was last remembered); no user identifiers. The cap
 is `VISION_DAILY_CAP_USD` (default 2.00; an invalid value fails closed). A check reserves its
 worst case (3 x 0.02 USD) before the first provider call; a call with no usable cost counts as
 a fallback of 0.02 USD. One process per ledger: a second one fails to take the lock
@@ -541,7 +544,17 @@ v2 semantics (v2.1.1):
   client timeout; the bot uses the default), so a request still billing across midnight keeps
   its hold.
 - A v1 ledger (`{"day", "spent_usd"}`) is read as having no holds, with its total kept; a v2
-  hold without `at` is read as taken at the end of its day.
+  hold without `at` is read as taken at the end of its day. A ledger without `memo` (v1, v2,
+  v2.1.1) is read as remembering nothing: every earlier id is `unknown`. The first write adds
+  `"memo"`; there is no manual step.
+- A hold is settled once (WP-CONTROLS-06). The ledger remembers the ids of holds that were
+  released (closed with nothing in flight), that expired as orphans, or that were settled, in
+  the same file, written by the same atomic write under the same lock. An id is remembered for
+  14 days since it was last remembered (`settle_memory_s`) and at most 2000 ids are kept
+  (`settle_memory_max`; the oldest are forgotten first); the bot uses the defaults. A forgotten
+  id is `unknown` again and books in full: the error is always on the side of counting too
+  much. With 2000 remembered ids the ledger is about 175 kB; the eight ledger writes of one
+  check then took about 0.13 s on the build machine (0.06 s with an empty memory).
 - Fails closed (no provider call): an unreadable or changed ledger, a clock that went back past
   the ledger's day, a failed write. `cap.state` is `ready` or `failed`, `cap.fail_code` says
   why (`LEDGER_CORRUPT`, `LOCK_WITHOUT_LEDGER`, `LEDGER_CHANGED`, `LEDGER_UNREADABLE`,
@@ -556,9 +569,48 @@ lock), on the VPS in `~/app`, with the id from the log line and the cost in USD:
 docker compose stop bot && docker compose run --rm bot python -c "from app.spend_cap import SpendCap; c = SpendCap('/data/spend_cap.json', 0); print(c.settle('HOLD_ID', REAL_COST_USD)); c.close()" && docker compose start bot
 ```
 
-It prints `settled` (the hold is dropped and the cost booked), `unknown` (no such orphan, e.g.
-already expired; the cost is still booked today) or `live`. Not settling is safe: the orphan
-blocks only its own day's budget.
+The command is the same as before; what it prints:
+
+- `settled`: the orphan is dropped and the cost booked.
+- `repeat`: this id was settled before. Nothing is booked, unless the new cost is higher than
+  the highest one settled so far: then only the difference is booked.
+- `released`: the hold ended normally (the check finished and closed it). Nothing is booked.
+- `expired`: the orphan had already expired. The cost is booked to today, once.
+- `unknown`: the id was never seen, or it was forgotten (14 days after it was last remembered,
+  or pushed out by 2000 newer ids). The cost is booked in full.
+- `live`: the hold belongs to a running check. Nothing is booked.
+
+Running the same command twice is safe. A cost typed too low is corrected by settling again
+with the right total. A cost typed too high cannot be lowered: it over-counts until the day
+ends. Not settling is safe too: the orphan blocks only its own day's budget.
+
+The clock is read only when an operation runs, so an expired orphan is remembered from the
+first operation after it expired, not from the second it expired (theone's finding, board msg
+58bd3f89). With 14 days of memory against a 600 s orphan lifetime this matters only for an id
+touched twice 14 days apart: it is then `unknown` and books in full.
+
+Dry run of the settle rule, without spending: a temp ledger inside a one-off container, no
+provider call, the live ledger and the running bot untouched:
+
+```bash
+docker compose run --rm bot python -c "import json, os; from app.spend_cap import SpendCap; os.makedirs('/tmp/dry'); p = '/tmp/dry/spend_cap.json'; c = SpendCap(p, 1); r = c.reserve(); r.begin(); c.close(); c = SpendCap(p, 1); print(*[c.settle(r.hold_id, 0.01) for _ in range(3)]); c.close(); d = json.load(open(p)); print(d['spent_usd'], len(d['memo']))"
+```
+
+It prints `settled repeat repeat` and `0.01 1`.
+
+Rollback. Fix forward is the default. The revision before this one (WP-CONTROLS-07) reads a
+ledger with `memo` and keeps the key untouched: a rollback to it needs no step, and while it
+runs nothing new is remembered (those ids are `unknown` afterwards and book in full). Any
+revision older than WP-CONTROLS-07 calls such a ledger corrupt and runs with vision off
+(`vision disabled, code=LEDGER_CORRUPT`). Before starting one, stop the bot and strip the key
+(atomic, mode 0600; it prints the keys that are left, `['day', 'holds', 'spent_usd']`):
+
+```bash
+docker compose stop bot && docker compose run --rm bot python -c "import json, os; p = '/data/spend_cap.json'; d = json.load(open(p)); d.pop('memo', None); fd = os.open(p + '.strip', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.fchmod(fd, 0o600); os.write(fd, json.dumps(d).encode()); os.fsync(fd); os.close(fd); os.replace(p + '.strip', p); print(sorted(d))"
+```
+
+Then start the old revision. Stripping forgets what was settled: a second settle of the same
+id books again, as it did before WP-CONTROLS-06.
 
 Lock without ledger = vision off. If `DATA_DIR` has `spend_cap.json.lock` but no
 `spend_cap.json` (the ledger was deleted, or a v1 volume where no cost was ever recorded), the
@@ -568,7 +620,8 @@ untouched for a human to look at. To reset, stop the bot and remove both files
 (`spend_cap.json` and `spend_cap.json.lock`); this forgets today's spend.
 
 Post-deploy check: the log has `vision enabled`; note any `spend_cap_orphan` lines;
-`cat /data/spend_cap.json` shows `"holds": {}` while no check is running.
+`cat /data/spend_cap.json` shows `"holds": {}` while no check is running, and a `"memo"`
+key from the first write on (one `released` entry per finished check).
 
 ## Per-call cost ceiling (WP-BOT-12 criterion 4)
 
@@ -675,5 +728,9 @@ the crop geometry with a fake imaging library (and the real one where Pillow is 
 `tests/test_call_ceiling.py` covers the per-call ceiling (WP-BOT-12 criterion 4) and
 `tests/test_spend_cap_v2_wiring.py` the spend cap v2 wiring (begin, not_sent, a process
 killed between begin and record, v1 ledger, orphan settle, settle closing the reservation).
+`tests/test_settle_once.py` covers the settle-once rule (WP-CONTROLS-06): the four traces
+recorded from the module at 18d6caa give the required answers, and seeded random traces through
+the real `SpendCap` and through the pure model `tests/settle_once_model.py` (theone's accepted
+entry of board task S1, byte for byte; the bot does not import it) agree after every step.
 Spend cap mutants (fable-terminal; not run by CI, each must print `killed`):
 `python3 tests/mutation/spend_cap_mutants.py`.
