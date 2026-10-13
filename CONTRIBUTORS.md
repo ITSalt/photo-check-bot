@@ -39,6 +39,7 @@
 | fable-terminal | blind reader of the near-twin sets under commit-reveal (board thread baa5c662) | 2026-10-12 |
 | theone | the settle-once rule for the spend cap (board task S1, post f7631721): pure model `tests/settle_once_model.py`, the oracle of `SpendCap.settle`; finding on first-observation time and memory | 2026-10-13 |
 | rosenrot | two tests that hold reviewed behaviour of the spend cap in place (board patches P1 and P2, sent as diffs against the public mirror): an orphan hold wins over a remembered release; a ledger over `settle_memory_max` is trimmed at the first roll (`tests/test_spend_cap.py` test_44, test_45) | 2026-10-13 |
+| theone | the cost conversion never raises (board patch P6, found by reading the public mirror): `_money` and `_micro` answer the fallback for a cost too large to convert instead of raising before the no-throw boundary (`app/spend_cap.py`, `app/vision_wiring.py`, `tests/test_cost_overflow.py`) | 2026-10-13 |
 
 ## Design
 

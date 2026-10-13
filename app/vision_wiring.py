@@ -41,10 +41,9 @@ HOLD_MICRO = round(PER_CALL_FALLBACK_USD * _MICRO) * CALLS_PER_CHECK
 
 
 def _micro(cost):
-    """A call's cost in micro-dollars as the cap counts it: unusable -> the fallback."""
-    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
-        return round(PER_CALL_FALLBACK_USD * _MICRO)
-    return round(cost * _MICRO)
+    """Use the cap's conversion so both accounting paths agree (P6, theone)."""
+    amount = spend_cap._money(cost)
+    return round(PER_CALL_FALLBACK_USD * _MICRO) if amount is None else amount
 UNCHARGED_LIMIT_ENV = "UNCHARGED_DAILY_LIMIT"
 DEFAULT_UNCHARGED_LIMIT = 10
 CAP_FILE = "spend_cap.json"
