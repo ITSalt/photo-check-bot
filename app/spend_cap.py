@@ -28,7 +28,9 @@ LEDGER_CHANGED, LEDGER_UNREADABLE, CLOCK_BACKWARDS, CLOSED). Reading it checks t
 Fails closed: an unreadable, changed or deleted ledger, a clock that went back past the ledger's day,
 a closed SpendCap, a failed write or any internal error means reserve() returns None and begin()
 returns False. Costs that could not be written stay counted in memory and are logged with the hold
-id and amount. To start from nothing, delete both <path> and <path>.lock."""
+id and amount. To start from nothing, delete both <path> and <path>.lock.
+The ledger key "memo" is reserved for the settle-once memory of the next revision: an object there is
+kept as read and written back unchanged with every write; nothing here uses it."""
 import fcntl, json, logging, math, os, tempfile, threading, time, uuid, datetime as _dt
 
 log = logging.getLogger("spend_cap")
@@ -122,6 +124,7 @@ class SpendCap:
         self._closed = False
         self._loaded = False                     # memory mirrors the ledger once loaded
         self._day, self._spent, self._holds = None, 0, {}
+        self._memo = None                        # the ledger's "memo" object as read, or None: kept, never used
         self._on_disk = None                     # bytes of our last good write (or of the file we loaded)
         fresh = not os.path.exists(self._path + ".lock")
         try:
@@ -170,8 +173,12 @@ class SpendCap:
             data = json.loads(raw.decode("utf-8"))
         except ValueError:
             raise _LedgerCorrupt from None
-        if not isinstance(data, dict) or set(data) not in ({"day", "spent_usd"}, {"day", "spent_usd", "holds"}):
+        if not isinstance(data, dict) or set(data) not in ({"day", "spent_usd"}, {"day", "spent_usd", "holds"},
+                                                           {"day", "spent_usd", "holds", "memo"}):
             raise _LedgerCorrupt                 # a v1 file (no "holds") is read as having none
+        memo = data.get("memo")                  # reserved for the next revision: kept as read, never used
+        if "memo" in data and not isinstance(memo, dict):
+            raise _LedgerCorrupt
         day, spent = _day(data["day"]), _money(data["spent_usd"])
         if spent is None or day > today:         # a future day is not trusted
             raise _LedgerCorrupt
@@ -192,7 +199,7 @@ class SpendCap:
             else:                                # a v2 hold: no "at" in memory or on disk; _roll() reads
                 at = None                        # it as the end of its day
             holds[hid] = _Hold(hid, hday, left, n, orphan=True, at=at)   # a previous owner's hold
-        return day, spent, holds
+        return day, spent, holds, memo
 
     def _load(self, today):
         """First use: read the ledger left by any previous owner. Later: check nobody changed it."""
@@ -211,7 +218,7 @@ class SpendCap:
             raise _LedgerCorrupt("LOCK_WITHOUT_LEDGER")   # the lock file outlived its ledger: it was deleted
         pend_day, pend = self._day, self._spent     # costs recorded while the ledger was unreadable
         if raw is not None:
-            self._day, self._spent, self._holds = self._parse(raw, today)
+            self._day, self._spent, self._holds, self._memo = self._parse(raw, today)
         self._on_disk, self._loaded = raw, True
         if pend and pend_day == self._day:
             self._spent += pend
@@ -238,7 +245,10 @@ class SpendCap:
             holds[h.id] = {"day": h.day, "usd": h.left / _M, "in_flight": h.in_flight}
             if h.at is not None:                 # a v2 hold is written back as the old owner wrote it
                 holds[h.id]["at"] = h.at
-        return json.dumps({"day": self._day, "spent_usd": self._spent / _M, "holds": holds}).encode("utf-8")
+        data = {"day": self._day, "spent_usd": self._spent / _M, "holds": holds}
+        if self._memo is not None:               # a ledger without "memo" is written without it
+            data["memo"] = self._memo
+        return json.dumps(data).encode("utf-8")
 
     def _write(self):
         raw = self._encode()
