@@ -428,7 +428,10 @@ class SpendCap:
         "released": the hold ended normally (closed with nothing in flight); nothing booked;
         "expired": the orphan had expired; the cost is booked today, once;
         "unknown": never seen, or forgotten; the cost is booked in full: money spent is money spent;
-        "live": the hold belongs to an open Reservation: nothing booked, use its record()."""
+        "live": the hold belongs to an open Reservation: nothing booked, use its record();
+        "invalid": id is not a non-empty string; no state, clock or ledger access (S2, theone)."""
+        if not isinstance(hold_id, str) or hold_id == "":
+            return "invalid"
         amount = _money(cost_usd)
         if amount is None:
             amount = self._fallback
