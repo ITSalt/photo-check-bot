@@ -10,6 +10,13 @@ A hold is freed only by evidence:
   record() or a not_sent()); otherwise the hold stays on the ledger as an orphan;
 - a hold found on the ledger when a new SpendCap starts is an orphan: counted in full for
   the day it was taken, until settle(hold_id, cost) books the real charge for it.
+A hold is settled once. The ledger remembers, under "memo", the ids it released, expired or
+settled, for settle_memory_s (default 14 days) since the id was last remembered and at most
+settle_memory_max ids (default 2000; the oldest are forgotten first). settle() of a remembered id
+says "released" (books nothing), "expired" (books the cost today, once) or "repeat" (books only
+what the new cost adds to the highest one settled so far). A forgotten or never seen id is
+"unknown" and books in full: the error is always on the side of counting too much.
+settle-once rule: theone (board task S1, 13.10.2026); contract by the studio
 A live hold counts until it is freed, even past midnight. An orphan stops counting only when its
 day is over AND it is older than orphan_lifetime_s (default 600 s; None = never, only settle()
 frees it). The lifetime is housekeeping, not proof: choose it >= 2x the client timeout plus how long
@@ -29,12 +36,14 @@ Fails closed: an unreadable, changed or deleted ledger, a clock that went back p
 a closed SpendCap, a failed write or any internal error means reserve() returns None and begin()
 returns False. Costs that could not be written stay counted in memory and are logged with the hold
 id and amount. To start from nothing, delete both <path> and <path>.lock.
-The ledger key "memo" is reserved for the settle-once memory of the next revision: an object there is
-kept as read and written back unchanged with every write; nothing here uses it."""
+Ledger file: {"day", "spent_usd", "holds": {id: {"day", "usd", "in_flight", "at"}}, "memo": {id:
+{"k": "released" | "expired" | "settled", "usd", "at"}}}. Older ledgers without "memo" (or without
+"holds") load as "nothing remembered"; the first write adds the key."""
 import fcntl, json, logging, math, os, tempfile, threading, time, uuid, datetime as _dt
 
 log = logging.getLogger("spend_cap")
 _M = 1_000_000                                  # micro-dollars per dollar
+_KINDS = ("released", "expired", "settled")     # what the ledger remembers of an id it no longer holds
 
 
 class CapConfigError(Exception):
@@ -97,6 +106,14 @@ def _taken_at(h):
     return _dt.datetime.fromisoformat(h.day).replace(tzinfo=_dt.timezone.utc).timestamp() + 86400
 
 
+class _Memo:
+    """A remembered id: how its hold ended, the highest cost settled for it (0 unless settled), when."""
+    __slots__ = ("kind", "usd", "at")
+
+    def __init__(self, kind, usd, at):
+        self.kind, self.usd, self.at = kind, usd, at
+
+
 class _Hold:
     __slots__ = ("id", "day", "left", "in_flight", "orphan", "at")
 
@@ -106,7 +123,7 @@ class _Hold:
 
 class SpendCap:
     def __init__(self, path, cap_usd, *, per_call_fallback_usd=0.02, calls_per_check=3, clock=time.time,
-                 orphan_lifetime_s=600):
+                 orphan_lifetime_s=600, settle_memory_s=1209600, settle_memory_max=2000):
         cap, fb = _money(cap_usd), _money(per_call_fallback_usd)
         if cap is None:
             raise CapConfigError("cap_usd must be a finite number >= 0")
@@ -116,7 +133,12 @@ class SpendCap:
             raise CapConfigError("calls_per_check must be an integer >= 1")
         if orphan_lifetime_s is not None and _money(orphan_lifetime_s) is None:
             raise CapConfigError("orphan_lifetime_s must be a finite number >= 0, or None for never")
+        if _money(settle_memory_s) is None:
+            raise CapConfigError("settle_memory_s must be a finite number >= 0")
+        if isinstance(settle_memory_max, bool) or not isinstance(settle_memory_max, int) or settle_memory_max < 0:
+            raise CapConfigError("settle_memory_max must be an integer >= 0")
         self._lifetime = orphan_lifetime_s
+        self._memory, self._memory_max = settle_memory_s, settle_memory_max
         self._path = os.path.abspath(os.fspath(path))
         self._cap, self._fallback, self._hold_size = cap, fb, fb * calls_per_check
         self._clock, self._now = clock, None
@@ -124,7 +146,7 @@ class SpendCap:
         self._closed = False
         self._loaded = False                     # memory mirrors the ledger once loaded
         self._day, self._spent, self._holds = None, 0, {}
-        self._memo = None                        # the ledger's "memo" object as read, or None: kept, never used
+        self._memo = {}                          # {hold id: _Memo}: ids released, expired or settled
         self._on_disk = None                     # bytes of our last good write (or of the file we loaded)
         fresh = not os.path.exists(self._path + ".lock")
         try:
@@ -176,9 +198,21 @@ class SpendCap:
         if not isinstance(data, dict) or set(data) not in ({"day", "spent_usd"}, {"day", "spent_usd", "holds"},
                                                            {"day", "spent_usd", "holds", "memo"}):
             raise _LedgerCorrupt                 # a v1 file (no "holds") is read as having none
-        memo = data.get("memo")                  # reserved for the next revision: kept as read, never used
-        if "memo" in data and not isinstance(memo, dict):
+        raw_memo = data.get("memo", {})          # an older ledger remembers nothing: every id is unknown
+        if not isinstance(raw_memo, dict):
             raise _LedgerCorrupt
+        memo = {}
+        for hid, m in raw_memo.items():
+            if not isinstance(m, dict) or set(m) != {"k", "usd", "at"} or not isinstance(m["k"], str) \
+                    or m["k"] not in _KINDS:
+                raise _LedgerCorrupt
+            try:
+                usd, at = _money(m["usd"]), m["at"]
+                if usd is None or isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(at):
+                    raise _LedgerCorrupt
+            except OverflowError:                # an integer too large for a float
+                raise _LedgerCorrupt from None
+            memo[hid] = _Memo(m["k"], usd, at)
         day, spent = _day(data["day"]), _money(data["spent_usd"])
         if spent is None or day > today:         # a future day is not trusted
             raise _LedgerCorrupt
@@ -218,7 +252,10 @@ class SpendCap:
             raise _LedgerCorrupt("LOCK_WITHOUT_LEDGER")   # the lock file outlived its ledger: it was deleted
         pend_day, pend = self._day, self._spent     # costs recorded while the ledger was unreadable
         if raw is not None:
+            pend_memo = self._memo                  # and the ids they were settled for
             self._day, self._spent, self._holds, self._memo = self._parse(raw, today)
+            for hid, m in pend_memo.items():
+                self._memo.setdefault(hid, m)       # what the ledger itself remembers of an id stands
         self._on_disk, self._loaded = raw, True
         if pend and pend_day == self._day:
             self._spent += pend
@@ -228,6 +265,13 @@ class SpendCap:
     def _roll(self, today):
         if self._day != today:
             self._day, self._spent = today, 0
+        self._expire(today)
+        now = self._now
+        for hid in [k for k, m in self._memo.items() if now - m.at >= self._memory]:
+            del self._memo[hid]                  # remembered long enough: the id is unknown again
+        self._trim()
+
+    def _expire(self, today):
         if self._lifetime is None:
             return                               # orphans wait for settle()
         now = self._now
@@ -235,6 +279,17 @@ class SpendCap:
                     if h.orphan and h.day < today and now - _taken_at(h) > self._lifetime]:
             log.warning("spend_cap_orphan_expired hold=%s usd=%.6f", hid, self._holds[hid].left / _M)
             del self._holds[hid]                 # an old day's orphan that can no longer bill
+            self._remember(hid, "expired")       # a late settle() of it books once, to the day it comes
+
+    def _remember(self, hid, kind, usd=0):
+        self._memo[hid] = _Memo(kind, usd, self._now)
+        self._trim()
+
+    def _trim(self):
+        over = len(self._memo) - self._memory_max
+        if over > 0:                             # forget the oldest; of two equally old, the smaller id
+            for _, hid in sorted((m.at, k) for k, m in self._memo.items())[:over]:
+                del self._memo[hid]
 
     def _total(self, today):
         return self._spent + sum(h.left for h in self._holds.values())   # a check spanning midnight still counts
@@ -245,10 +300,9 @@ class SpendCap:
             holds[h.id] = {"day": h.day, "usd": h.left / _M, "in_flight": h.in_flight}
             if h.at is not None:                 # a v2 hold is written back as the old owner wrote it
                 holds[h.id]["at"] = h.at
-        data = {"day": self._day, "spent_usd": self._spent / _M, "holds": holds}
-        if self._memo is not None:               # a ledger without "memo" is written without it
-            data["memo"] = self._memo
-        return json.dumps(data).encode("utf-8")
+        memo = {k: {"k": m.kind, "usd": m.usd / _M, "at": m.at} for k, m in self._memo.items()}
+        return json.dumps({"day": self._day, "spent_usd": self._spent / _M, "holds": holds,
+                           "memo": memo}).encode("utf-8")
 
     def _write(self):
         raw = self._encode()
@@ -298,7 +352,7 @@ class SpendCap:
                                                  # untouched for a human to look at
         self._roll(today)
         undo = (self._day, self._spent, {k: _Hold(h.id, h.day, h.left, h.in_flight, h.orphan, h.at)
-                                          for k, h in self._holds.items()})
+                                          for k, h in self._holds.items()})   # no memo: reserve and begin keep it
         out = apply(today)
         try:
             self._write()
@@ -363,20 +417,37 @@ class SpendCap:
 
     def settle(self, hold_id, cost_usd):
         """Book the total real provider charge for an orphan hold (all its requests, from the provider's
-        usage records) and drop the hold. Bad costs count as the fallback. Never raises. Returns
-        "settled"; "unknown" (no such orphan, e.g. expired: the cost is still booked today); or
-        "live" (the hold belongs to an open Reservation: nothing booked, use its record())."""
+        usage records) and drop the hold. Bad costs count as the fallback. Never raises. Safe to repeat:
+        the id is remembered (see the module text). Returns
+        "settled": the orphan is dropped and the cost booked;
+        "repeat": settled before; only what this cost adds to the highest one so far is booked;
+        "released": the hold ended normally (closed with nothing in flight); nothing booked;
+        "expired": the orphan had expired; the cost is booked today, once;
+        "unknown": never seen, or forgotten; the cost is booked in full: money spent is money spent;
+        "live": the hold belongs to an open Reservation: nothing booked, use its record()."""
         amount = _money(cost_usd)
         if amount is None:
             amount = self._fallback
         try:
             with self._lock:
                 def apply(today):
-                    h = self._holds.get(hold_id)
+                    h, m = self._holds.get(hold_id), self._memo.get(hold_id)
                     if h is not None and not h.orphan:
                         return "live"
-                    self._spent += amount
-                    return "unknown" if self._holds.pop(hold_id, None) is None else "settled"
+                    if h is None and m is not None and m.kind == "released":
+                        return "released"           # not remembered afresh: it fades 14 days after the release
+                    out, booked, high = "unknown", amount, amount
+                    if h is not None:
+                        del self._holds[hold_id]
+                        out = "settled"
+                    elif m is not None and m.kind == "expired":
+                        out = "expired"
+                    elif m is not None:             # settled before: only an increase is new money
+                        out, high = "repeat", max(amount, m.usd)
+                        booked = high - m.usd
+                    self._spent += booked
+                    self._remember(hold_id, "settled", high)
+                    return out
                 return self._change(apply, must_persist=False, what=f" hold={hold_id} usd={amount / _M:.6f}")
         except Exception:
             log.error("spend_cap_error code=INTERNAL hold=%s usd=%.6f", hold_id, amount / _M)
@@ -417,6 +488,7 @@ class SpendCap:
                     return
                 if h.in_flight == 0:
                     del self._holds[hid]
+                    self._remember(hid, "released")  # a later settle() of it books nothing
                 else:
                     h.orphan = True                  # a request is out: its hold stays counted
             self._change(apply, must_persist=False, what=f" hold={hid} close")
