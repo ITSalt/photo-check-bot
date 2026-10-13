@@ -61,13 +61,17 @@ class _LedgerCorrupt(Exception):
 
 
 def _money(x):
-    """A finite, non-negative real number (not bool) -> micro-dollars; anything else -> None."""
+    """Non-negative representable cost -> micro-dollars; unusable -> None (P6, theone)."""
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         return None
-    x = float(x)
-    if not math.isfinite(x) or x < 0:
+    try:
+        value = float(x)
+        scaled = value * _M
+        if value < 0 or not math.isfinite(scaled):
+            return None
+        return round(scaled)
+    except (OverflowError, ValueError, TypeError):
         return None
-    return round(x * _M)
 
 
 def _day(s):
