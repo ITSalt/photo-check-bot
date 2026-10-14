@@ -129,7 +129,7 @@ class CrashTests(V2Base):
         code = code.replace("/data/spend_cap.json", self.cap_path()).replace("HOLD_ID", hold) \
                    .replace("REAL_COST_USD", "0.004")
         p = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=30)
-        self.assertEqual((p.returncode, p.stdout.strip()), (0, "settled"))
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, "settled 0.004"))   # P7: the stored amount
         self.assertEqual(self.holds(), {})
         self.assertAlmostEqual(self.ledger()["spent_usd"], 0.004)
 
