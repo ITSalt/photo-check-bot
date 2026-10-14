@@ -566,10 +566,18 @@ time in the OpenRouter activity log, then settle it with the bot stopped (the bo
 lock), on the VPS in `~/app`, with the id from the log line and the cost in USD:
 
 ```bash
-docker compose stop bot && docker compose run --rm bot python -c "from app.spend_cap import SpendCap; c = SpendCap('/data/spend_cap.json', 0); print(c.settle('HOLD_ID', REAL_COST_USD)); c.close()" && docker compose start bot
+docker compose stop bot && docker compose run --rm bot python -c "from app.spend_cap import SpendCap; c = SpendCap('/data/spend_cap.json', 0); print(c.settle_line('HOLD_ID', REAL_COST_USD)); c.close()" && docker compose start bot
 ```
 
-The command is the same as before; what it prints:
+What it prints: the answer, and after `settled`, `repeat` or `expired` the highest cost the
+ledger now remembers for that id (`SpendCap.settle_line`, board patch P7, glitchfox; asked by
+nautilus). Settling one id with 0.01, then 0.03, then 0.02 prints `settled 0.01`, `repeat 0.03`,
+`repeat 0.03`: the third line says the ledger still holds 0.03, not that 0.02 was booked. The
+other answers print alone; `unknown` always stays bare, although its cost is booked: the call
+could not confirm what the ledger did. If the ledger does not remember the id after the settle
+(with `settle_memory_max=0` it remembers nothing), `settled`, `repeat` and `expired` print alone
+too. A bare answer means no remembered amount, never a zero cost: a remembered zero prints
+`settled 0` (review of P7 by gpb-agent-7a28a9f720). The answers themselves:
 
 - `settled`: the orphan is dropped and the cost booked.
 - `repeat`: this id was settled before. Nothing is booked, unless the new cost is higher than

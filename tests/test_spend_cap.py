@@ -746,6 +746,48 @@ class SettleOnce(Base):
                     c.close()
                     c = self.cap()  # same clock and persisted memo; lower claim comes first after restart
 
+    def test_48_settle_line_prints_the_highest_remembered_amount(self):   # P7, glitchfox (asked by nautilus)
+        hid = self.orphan()
+        b = self.cap()
+        self.assertEqual([b.settle_line(hid, x) for x in (0.01, 0.03, 0.02)],
+                         ["settled 0.01", "repeat 0.03", "repeat 0.03"])   # the highest, not the last or the booked
+        self.assertAlmostEqual(self.spent(), 0.03, places=9)
+        twin = SpendCap(os.path.join(self.tmp.name, "twin.json"), 2.00, clock=self.clock)
+        self.addCleanup(twin.close)
+        self.assertEqual([twin.settle("t", x) for x in (0.01, 0.03, 0.02)], ["unknown", "repeat", "repeat"])
+        b.settle_line("t", 0.01); b.settle_line("t", 0.03); b.settle_line("t", 0.02)
+        with open(os.path.join(self.tmp.name, "twin.json")) as f:
+            self.assertEqual(self.ledger()["memo"]["t"], json.load(f)["memo"]["t"])   # same memo as plain settle()
+        self.assertAlmostEqual(self.spent(), 0.06, places=9)
+        r = b.reserve(); r.close()
+        self.assertEqual(b.settle_line(r.hold_id, 0.05), "released")
+        self.assertEqual(b.settle_line("never-seen", 1), "unknown")
+        self.assertEqual(b.settle_line("never-seen", 1), "repeat 1")
+        live = b.reserve(); self.assertTrue(live.begin())
+        self.assertEqual(b.settle_line(live.hold_id, 0.01), "live")
+        self.assertEqual(b.settle_line("", 0.01), "invalid")
+        b.close()
+        self.clock.t = DAY1 + 86400 - 60
+        exp = self.orphan()
+        self.clock.t = DAY1 + 86400 + 600               # the next day, older than the 600 s lifetime
+        c = self.cap()
+        with self.assertLogs("spend_cap", "WARNING"):
+            self.assertIsNotNone(c.reserve())           # the orphans expired
+        self.assertEqual(c.settle_line(exp, 0.0078), "expired 0.0078")
+
+    def test_49_settle_line_without_memory_prints_the_answer_alone(self):   # P7 v2, review gpb-agent-7a28a9f720
+        hid = self.orphan()
+        b = self.cap(settle_memory_max=0)
+        self.assertEqual(b.settle_line(hid, 0.0), "settled")             # bare: no amount remembered, not zero
+        self.assertEqual(self.ledger()["memo"], {})
+        self.assertEqual([b.settle_line(hid, x) for x in (0.01, 0.03, 0.02)], ["unknown"] * 3)   # nothing kept
+        self.assertAlmostEqual(self.spent(), 0.06, places=9)             # each booked in full
+        b.close()
+        zero = self.orphan()
+        c = self.cap()
+        self.assertEqual(c.settle_line(zero, 0.0), "settled 0")          # the remembered zero is a number
+        self.assertEqual(self.ledger()["memo"][zero]["usd"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

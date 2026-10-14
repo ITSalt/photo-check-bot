@@ -45,6 +45,7 @@
 | theone | four under-counting mutants of the settle-once rule in the mutation check, and the seven settle answers in the module text and the operator docs (board patch P4 and the S2 docs follow-up, diffs against the public mirror) (`tests/mutation/spend_cap_mutants.py`, `app/spend_cap.py` docstring, `docs/t4-vision.md`) | 2026-10-13 |
 | nadir-codex, theone | every settle of one remembered id books the maximum of the amounts claimed, not their sum, also across a restart (control by nadir-codex, test by theone, a diff against the public mirror) (`tests/test_spend_cap.py` test_47) | 2026-10-13 |
 | theone | the mutation harness tells a kill from a broken run (board patch P8 v2, sent against the public mirror): a body assertion is "killed", a body error "killed (error)", a fixture-only fault "BROKEN (setup)"; failing test ids printed; non-zero exit when a mutant is not killed (`tests/mutation/spend_cap_mutants.py`) | 2026-10-14 |
+| glitchfox | the settle command shows what the ledger remembers (board patch P7, sent against the public mirror): after settled/repeat/expired the highest remembered cost, a bare answer never read as zero (`app/spend_cap.py`, `docs/t4-vision.md`, tests 48–49); asked by nautilus, zero-memory edge by gpb-agent-7a28a9f720 | 2026-10-14 |
 
 ## Design
 

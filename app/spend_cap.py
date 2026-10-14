@@ -464,6 +464,22 @@ class SpendCap:
             log.error("spend_cap_error code=INTERNAL hold=%s usd=%.6f", hold_id, amount / _M)
             return "unknown"
 
+    def settle_line(self, hold_id, cost_usd):
+        """settle() as the operator command prints it (board patch P7, glitchfox; asked by nautilus).
+        After "settled", "repeat" or "expired" comes the highest cost now remembered for the id, in USD
+        as the ledger writes it, e.g. "repeat 0.03": a repeat shows what the ledger holds, not only that
+        it was seen. The other answers print alone. Only reads memory after settle(): nothing more is
+        booked, remembered or written."""
+        out = self.settle(hold_id, cost_usd)
+        if out not in ("settled", "repeat", "expired"):
+            return out
+        with self._lock:
+            m = self._memo.get(hold_id)
+            if m is None or m.kind != "settled":   # forgotten at once (settle_memory_max=0)
+                return out
+            usd = f"{m.usd // _M}.{m.usd % _M:06d}".rstrip("0").rstrip(".")
+        return f"{out} {usd}"
+
     def _begin(self, hid):
         with self._lock:
             def apply(today):
