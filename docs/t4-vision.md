@@ -577,7 +577,15 @@ other answers print alone; `unknown` always stays bare, although its cost is boo
 could not confirm what the ledger did. If the ledger does not remember the id after the settle
 (with `settle_memory_max=0` it remembers nothing), `settled`, `repeat` and `expired` print alone
 too. A bare answer means no remembered amount, never a zero cost: a remembered zero prints
-`settled 0` (review of P7 by gpb-agent-7a28a9f720). The answers themselves:
+`settled 0` (review of P7 by gpb-agent-7a28a9f720). If this command's ledger write failed, a
+marker follows (P9, glitchfox; review theone): `settled 0.01 NOT SAVED (LEDGER_WRITE)` when the
+file was not touched, `... PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)` when the new bytes may be on
+disk without a confirmed directory fsync, `... NOT SAVED (<fail_code>)` when the ledger could not
+be used at all. Retry accounting depends on retained evidence. If the settled memo is still retained, repeating
+the same hold ID and cost does not add another charge to the ledger. If that memo is missing, expired or
+evicted, a retry may return unknown and book the full cost again. A persistence warning alone does not
+establish whether the earlier accounting reached disk; do not infer that an unconditional rerun is
+non-incrementing. Fix the cause (disk, mount, permissions) before deciding to rerun. The answers themselves:
 
 - `settled`: the orphan is dropped and the cost booked.
 - `repeat`: this id was settled before. Nothing is booked, unless the new cost is higher than

@@ -788,6 +788,107 @@ class SettleOnce(Base):
         self.assertEqual(c.settle_line(zero, 0.0), "settled 0")          # the remembered zero is a number
         self.assertEqual(self.ledger()["memo"][zero]["usd"], 0)
 
+    def raw(self):
+        with open(self.path, "rb") as f: return f.read()
+
+    def fail_write(self, where):
+        """Make the next ledger writes fail: "write" (the whole _write), "replace" (before os.replace) or
+        "dirsync" (after os.replace, when the directory is opened for fsync)."""
+        from unittest import mock
+        if where == "write":
+            return mock.patch.object(SpendCap, "_write", side_effect=OSError(28, "No space left on device"))
+        if where == "replace":
+            return mock.patch("app.spend_cap.os.replace", side_effect=OSError(30, "Read-only file system"))
+        real_open, d = os.open, self.tmp.name
+        def dir_open(path, flags, *a, **kw):
+            if os.fspath(path) == d and flags == os.O_RDONLY:
+                raise OSError(5, "Input/output error")
+            return real_open(path, flags, *a, **kw)
+        return mock.patch("app.spend_cap.os.open", side_effect=dir_open)
+
+    def test_50_settle_line_says_when_its_write_failed(self):   # P9, glitchfox (review theone)
+        for where, mark, later in (("write", " PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)", None),
+                                   ("replace", " NOT SAVED (LEDGER_WRITE)", None),
+                                   # the bytes did land, _on_disk was not updated: the next call fails closed
+                                   ("dirsync", " PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)", " NOT SAVED (LEDGER_CHANGED)")):
+            with self.subTest(where=where):
+                self.tmp.cleanup(); os.makedirs(self.tmp.name)
+                self.clock.t = DAY1 + 3600
+                hid = self.orphan()
+                b = self.cap()
+                before = self.raw()
+                with self.fail_write(where), self.assertLogs("spend_cap", "ERROR"):
+                    self.assertEqual([b.settle_line(hid, x) for x in (0.01, 0.03, 0.02)],
+                                     ["settled 0.01" + mark] + ["repeat 0.03" + (later or mark)] * 2)
+                    self.assertEqual(b.settle_line("never-seen", 1), "unknown")       # P7: prints alone
+                    self.assertEqual(b.settle_line("", 1), "invalid")
+                    r = b.reserve()                                                  # must_persist: refused
+                    self.assertIsNone(r)
+                self.assertEqual(sorted(os.listdir(self.tmp.name)), ["ledger.json", "ledger.json.lock"])  # no tmp left
+                if where == "replace":
+                    self.assertEqual(self.raw(), before)                              # NOT SAVED is literal
+                b.close()
+                self.clock.t = DAY1 + 86400 - 60
+                exp = self.orphan()
+                self.clock.t = DAY1 + 86400 + 600
+                c = self.cap()
+                with self.assertLogs("spend_cap", "WARNING"):
+                    self.assertIsNotNone(c.reserve())
+                with self.fail_write(where), self.assertLogs("spend_cap", "ERROR"):
+                    self.assertEqual(c.settle_line(exp, 0.0078), "expired 0.0078" + mark)
+                c.close()
+
+    def test_51_plain_settle_and_the_next_good_call_are_unchanged(self):   # P9
+        hid = self.orphan()
+        b = self.cap()
+        with self.fail_write("replace"), self.assertLogs("spend_cap", "ERROR"):
+            self.assertEqual([b.settle(hid, x) for x in (0.01, 0.03)], ["settled", "repeat"])   # bot path: plain
+        self.assertEqual(b.settle_line(hid, 0.02), "repeat 0.03")       # later good write: no stale marker
+        self.assertAlmostEqual(self.spent(), 0.03, places=9)              # memory kept counting, then saved
+        b.close()
+        hid2 = self.orphan()
+        e = self.cap(settle_memory_max=0)
+        with self.fail_write("write"), self.assertLogs("spend_cap", "ERROR"):
+            self.assertEqual(e.settle_line(hid2, 0.0), "settled PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)")  # no zero
+
+    def test_52_retry_after_a_failed_one_shot_books_once(self):   # P9: the operator may simply run it again
+        for where, second in (("replace", "settled 0.01"), ("dirsync", "repeat 0.01")):
+            with self.subTest(where=where):
+                self.tmp.cleanup(); os.makedirs(self.tmp.name)
+                hid = self.orphan()
+                b = self.cap()
+                spent0 = self.spent()
+                with self.fail_write(where), self.assertLogs("spend_cap", "ERROR"):
+                    self.assertNotEqual(b.settle_line(hid, 0.01), "settled 0.01")
+                b.close()                                                     # the one-shot process ends
+                c = self.cap()
+                self.assertEqual(c.settle_line(hid, 0.01), second)
+                self.assertAlmostEqual(self.spent(), spent0 + 0.01, places=9)   # booked once either way
+
+    def test_54_max0_failed_replace_restart_books_unknown_again(self):  # P9: theone #87252/#87262 control
+        # settle_memory_max=0 + fail after replace + process restart: memo gone, retry books full cost again.
+        hid = self.orphan()
+        b = self.cap(settle_memory_max=0)
+        spent0 = self.spent()
+        # "after replace" = dirsync path: bytes may be on disk, memo still not retained at max=0
+        with self.fail_write("dirsync"), self.assertLogs("spend_cap", "ERROR"):
+            line = b.settle_line(hid, 0.01)
+            self.assertIn("PERSISTENCE NOT CONFIRMED", line)
+            self.assertTrue(line.startswith("settled"))
+        b.close()
+        c = self.cap(settle_memory_max=0)  # restart; memo was never retained
+        self.assertEqual(c.settle_line(hid, 0.01), "unknown")
+        self.assertAlmostEqual(self.spent(), spent0 + 0.02, places=9)  # first attempt + full unknown retry
+
+    def test_53_untouched_ledger_says_not_saved_with_its_code(self):   # P9: the branch that never writes
+        hid = self.orphan()
+        b = self.cap()
+        self.assertEqual(b.orphans()[0][0], hid)                      # loaded
+        with open(self.path, "ab") as f:
+            f.write(b" ")                                             # someone else changed the file
+        with self.assertLogs("spend_cap", "ERROR"):
+            self.assertEqual(b.settle_line(hid, 0.01), "settled 0.01 NOT SAVED (LEDGER_CHANGED)")
+
 
 if __name__ == "__main__":
     unittest.main()
