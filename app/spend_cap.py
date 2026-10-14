@@ -17,9 +17,10 @@ says "released" (books nothing), "expired" (books the cost today, once) or "repe
 what the new cost adds to the highest one settled so far). A forgotten or never seen id is
 "unknown" and books in full: the error is always on the side of counting too much.
 The seven settle() answers are "settled", "repeat", "released", "expired", "unknown", "live"
-and "invalid". A non-string or empty id answers "invalid" without booking a cost or touching
-state, the clock or the ledger; retype the command with the correct id. Every non-empty string
-remains a valid id, including " ": this is not a format check or proof that the id was issued.
+and "invalid". An id that is not a str matching ^[0-9a-f]{32}$ (exactly 32 lowercase hex digits)
+answers "invalid" without booking a cost or touching state, the clock or the ledger; retype the
+command with the correct id. Uppercase hex is invalid (no normalisation). Non-32-hex ids already
+in holds or memo are lost for settle(): it will not charge them; fix the ledger out of band.
 settle-once rule: theone (board task S1, 13.10.2026); contract by the studio
 A live hold counts until it is freed, even past midnight. An orphan stops counting only when its
 day is over AND it is older than orphan_lifetime_s (default 600 s; None = never, only settle()
@@ -44,7 +45,7 @@ To start from nothing, delete both <path> and <path>.lock.
 Ledger file: {"day", "spent_usd", "holds": {id: {"day", "usd", "in_flight", "at"}}, "memo": {id:
 {"k": "released" | "expired" | "settled", "usd", "at"}}}. Older ledgers without "memo" (or without
 "holds") load as "nothing remembered"; the first write adds the key."""
-import fcntl, json, logging, math, os, tempfile, threading, time, uuid, datetime as _dt
+import fcntl, json, logging, math, os, re, tempfile, threading, time, uuid, datetime as _dt
 
 log = logging.getLogger("spend_cap")
 _M = 1_000_000                                  # micro-dollars per dollar
@@ -444,14 +445,14 @@ class SpendCap:
         "expired": the orphan had expired; the cost is booked today, once;
         "unknown": never seen, or forgotten; the cost is booked in full: money spent is money spent;
         "live": the hold belongs to an open Reservation: nothing booked, use its record();
-        "invalid": id is not a non-empty string; no state, clock or ledger access (S2, theone)."""
+        "invalid": id is not 32 lowercase hex; no state, clock or ledger access (S2 + P11)."""
         return self._settle(hold_id, cost_usd)[0]
 
     def _settle(self, hold_id, cost_usd):
         """settle() for settle_line (P9): (answer, amount remembered now in micro-dollars or None, unsaved),
         all from this one call under one lock. unsaved is {} when the ledger write went through."""
         unsaved = {}
-        if not isinstance(hold_id, str) or hold_id == "":
+        if not isinstance(hold_id, str) or not re.fullmatch(r"[0-9a-f]{32}", hold_id):
             return "invalid", None, unsaved
         amount = _money(cost_usd)
         if amount is None:

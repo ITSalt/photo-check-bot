@@ -35,6 +35,16 @@ import collections, copy, datetime, hashlib, json, logging, os, random, sys, tem
 from unittest import mock
 
 from app.spend_cap import Reservation, SpendCap
+
+import hashlib
+import re as _re
+
+def _hid(name):
+    """P11: model/fixture short ids become stable 32-lowercase-hex for SpendCap.settle."""
+    if isinstance(name, str) and _re.fullmatch(r"[0-9a-f]{32}", name):
+        return name
+    return hashlib.md5(str(name).encode()).hexdigest()
+
 from tests import settle_once_model as model
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -70,7 +80,7 @@ class Real:
         self.shapes = set()
 
     def hold_id(self, name):
-        return self.ids.setdefault(name, name)    # never reserved: the name itself is the made-up id
+        return self.ids.setdefault(name, _hid(name))  # P11: never reserved -> stable 32-hex
 
     def ledger(self):
         with open(self.path) as f:
@@ -178,7 +188,7 @@ class Differential(Quiet):
 
     def trace(self, seed, seen, steps=STEPS):
         next_id = []
-        with mock.patch.object(uuid, "uuid4", lambda: types.SimpleNamespace(hex=next_id[-1])):
+        with mock.patch.object(uuid, "uuid4", lambda: types.SimpleNamespace(hex=_hid(next_id[-1]))):
             self.one_trace(seed, seen, steps, next_id)
 
     def one_trace(self, seed, seen, steps, next_id):
@@ -220,7 +230,8 @@ class Differential(Quiet):
             got = real.apply(e)                                   # the ledger drops them at the next operation
             where = (seed, step, e, cfg)
             self.assertEqual(got, (r["result"], r["booked"], counted), where)
-            self.assertEqual(real.ids.get(e.get("id"), e.get("id")), e.get("id"), where)   # the same ids on both sides
+            if e.get("id") is not None:
+                self.assertEqual(real.hold_id(e["id"]), _hid(e["id"]), where)   # P11: short ids map to 32-hex; reserved stay hex
             led = real.ledger()                                   # and the whole state, not only the totals
             self.assertEqual(led["spent"], s["spent"], where)
             self.assertEqual(led["day"], day_of(s["day"] * 86400), where)

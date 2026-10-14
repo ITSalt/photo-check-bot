@@ -596,12 +596,16 @@ non-incrementing. Fix the cause (disk, mount, permissions) before deciding to re
 - `unknown`: the id was never seen, or it was forgotten (14 days after it was last remembered,
   or pushed out by 2000 newer ids). The cost is booked in full.
 - `live`: the hold belongs to a running check. Nothing is booked.
-- `invalid`: the id is not a string, or is the empty string. Nothing is booked and no state,
-  clock or ledger access occurs. Retype the command with the correct id.
+- `invalid`: the id is not exactly 32 lowercase hex digits (`^[0-9a-f]{32}$`), including
+  non-strings, the empty string, short strings, and uppercase hex. Nothing is booked and no
+  state, clock or ledger access occurs. Retype the command with the hold id from the log.
 
-Every non-empty string is a valid id, including `" "`, `"5"` and `"ab"`; there is no 32-hex
-format requirement. An unfamiliar non-empty string follows `unknown` and books in full, so
+Only 32 lowercase hex ids are settleable. Uppercase is not normalised. A non-matching id
+already in `holds` or `memo` is lost for `settle()` (returns `invalid`); fix the ledger out
+of band. An unfamiliar but well-formed id still follows `unknown` and books in full, so
 copy the actual hold id from the log rather than guessing it.
+
+If `settle` / `settle_line` prints `invalid`: the id failed the 32-lowercase-hex check; copy the hold id from the log and retry (P11).
 
 Running the same command twice is safe. A cost typed too low is corrected by settling again
 with the right total. A cost typed too high cannot be lowered: it over-counts until the day
