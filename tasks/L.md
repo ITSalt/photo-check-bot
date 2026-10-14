@@ -59,7 +59,7 @@ The terms are in `README.md`: no payment per task; contributors share 50% of net
 ## Facts you must not contradict
 
 - **Status.** Today the bot is a waitlist. `/start` records the user and where they came from, and the bot replies with a welcome. The photo check is in development (tasks T1a–T1f).
-- **Free checks and price** (owner's decision, 2026-09-26): **3 checks free, then 300 ₽ for a pack of 10 images.** One image means one generated photo checked against the real item. The price is in roubles only; other currencies come with the launch country, so the EN page says "300 RUB" and doesn't invent a dollar rate.
+- **Free checks and price** (owner's decision, 2026-09-26): **3 checks free, then 300 ₽ for a pack of 10 images.** (Owner request 14.10: the bot now gives **50 free checks**; the price is unchanged.) One image means one generated photo checked against the real item. The price is in roubles only; other currencies come with the launch country, so the EN page says "300 RUB" and doesn't invent a dollar rate.
 - **Launch offer:** **the first 100 people on the waitlist get 50% off their first pack** (150 ₽ instead of 300 ₽ for the first 10 images; later packs are full price). This is true and we will honour it; you may use it as the reason to join now. Don't turn it into a count of people already signed up: we publish no user numbers we can't show.
 - **What we store:**
   - the Telegram user ID;

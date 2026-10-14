@@ -43,7 +43,7 @@ jobs:
           VISION_BASE_URL: https://openrouter.ai/api/v1/chat/completions
           VISION_MODEL: google/gemini-3.6-flash
           VISION_HOST_ALLOWLIST: openrouter.ai
-          VISION_DAILY_CAP_USD: "2"
+          VISION_DAILY_CAP_USD: "5"
           # Free-check counter key (D-12). Unset or shorter than 32 characters keeps the vision check off.
           CHECK_COUNTER_SALT: ${{ secrets.CHECK_COUNTER_SALT }}
         run: |

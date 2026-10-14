@@ -31,13 +31,29 @@ class CounterTests(unittest.TestCase):
     def counter(self, day=0):
         return CheckCounter(self.path, SALT, clock=at_day(day))
 
-    def test_three_free_then_refused(self):
+    def test_free_checks_then_refused(self):
+        self.assertEqual(check_counter.FREE_CHECKS, 50)   # owner request 14.10 (was 3)
         c = self.counter()
-        for _ in range(3):
+        for _ in range(check_counter.FREE_CHECKS):
             self.assertTrue(c.allows(USER))
             c.charge(USER)
         self.assertFalse(c.allows(USER))
         self.assertTrue(c.allows(USER + 1))
+
+    def test_existing_row_keeps_its_count_after_the_raise(self):
+        # A row written while the limit was 3 (used 3, refused then) loads unchanged: 47 left.
+        old = CheckCounter(self.path, SALT, free=3, clock=at_day(0))
+        for _ in range(3):
+            old.charge(USER)
+        self.assertFalse(old.allows(USER))
+        before = pathlib.Path(self.path).read_bytes()
+        c = self.counter()
+        self.assertEqual(pathlib.Path(self.path).read_bytes(), before)
+        self.assertEqual(c.used(USER), 3)
+        for _ in range(check_counter.FREE_CHECKS - 3):
+            self.assertTrue(c.allows(USER))
+            c.charge(USER)
+        self.assertFalse(c.allows(USER))
 
     def test_file_has_only_key_used_last_and_no_raw_id(self):
         c = self.counter()

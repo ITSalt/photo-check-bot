@@ -1,4 +1,4 @@
-"""Free-check counter (D-12): 3 free checks per Telegram user. Standard library only.
+"""Free-check counter (D-12): 50 free checks per Telegram user. Standard library only.
 
 The file in DATA_DIR is a JSON list of rows {"key", "used", "last"} and nothing else:
 key  = HMAC-SHA256(CHECK_COUNTER_SALT, decimal user id), hex; the raw id, names,
@@ -25,7 +25,7 @@ import time
 
 log = logging.getLogger("check_counter")
 
-FREE_CHECKS = 3
+FREE_CHECKS = 50
 RETENTION_DAYS = 90
 MIN_SALT_CHARS = 32
 SALT_ENV = "CHECK_COUNTER_SALT"
