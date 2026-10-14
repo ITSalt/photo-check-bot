@@ -1,6 +1,19 @@
 import json, math, os, signal, stat, subprocess, sys, tempfile, threading, time, traceback, unittest
 from app.spend_cap import SpendCap, Reservation, CapConfigError, SingleWriterError, cap_from_env
 
+import hashlib
+import re
+
+_HOLD_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def HID(label):
+    """P11 test helper: stable 32-lowercase-hex id from a short label (or pass-through)."""
+    if isinstance(label, str) and _HOLD_ID_RE.fullmatch(label):
+        return label
+    return hashlib.md5(str(label).encode()).hexdigest()
+
+
 DAY1 = 1791504000.0          # 2026-10-09 00:00:00 UTC
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -281,11 +294,11 @@ class DurableHolds(Base):
         with open(self.path, "w") as f: f.write("{broken")
         c = self.cap(0.10)
         with self.assertLogs("spend_cap", "ERROR"):
-            self.assertEqual(c.settle("unknown", 0.05), "unknown")  # booked in memory, file left for a human
+            self.assertEqual(c.settle(HID("unknown"), 0.05), "unknown")  # booked in memory, file left for a human
             self.assertIsNone(c.reserve())
         with open(self.path, "w") as f: json.dump({"day": "2026-10-09", "spent_usd": 0.0}, f)
         self.assertIsNone(c.reserve())                  # repaired file + the 0.05 kept: 0.11 > 0.10
-        c.settle("unknown", 0.0)                        # first good write carries the kept 0.05
+        c.settle(HID("unknown"), 0.0)                        # first good write carries the kept 0.05
         self.assertAlmostEqual(self.ledger()["spent_usd"], 0.05, places=9)
 
     def test_18_check_spanning_midnight_keeps_its_hold(self):
@@ -334,7 +347,7 @@ class DurableHolds(Base):
         r = c.reserve()
         self.assertEqual(c.settle(r.hold_id, 0.05), "live")   # nothing booked: use r.record()
         self.assertEqual(self.ledger()["spent_usd"], 0.0)
-        self.assertEqual(c.settle("nope", 0.01), "unknown")   # booked anyway: money spent is money spent
+        self.assertEqual(c.settle(HID("nope"), 0.01), "unknown")   # booked anyway: money spent is money spent
         self.assertAlmostEqual(self.ledger()["spent_usd"], 0.01, places=9)
 
     # -- v2.1: an orphan stops counting when it can no longer bill, not at midnight
@@ -450,10 +463,10 @@ class SettleOnce(Base):
 
     def test_31_second_settle_of_an_unknown_id_is_a_repeat(self):   # test_22, continued
         c = self.cap(0.12)
-        self.assertEqual(c.settle("nope", 0.01), "unknown")
-        self.assertEqual(c.settle("nope", 0.01), "repeat")    # the same charge is not booked twice
+        self.assertEqual(c.settle(HID("nope"), 0.01), "unknown")
+        self.assertEqual(c.settle(HID("nope"), 0.01), "repeat")    # the same charge is not booked twice
         self.assertAlmostEqual(self.spent(), 0.01, places=9)
-        self.assertEqual(self.ledger()["memo"], {"nope": {"k": "settled", "usd": 0.01, "at": DAY1 + 3600}})
+        self.assertEqual(self.ledger()["memo"], {HID("nope"): {"k": "settled", "usd": 0.01, "at": DAY1 + 3600}})
 
     def test_32_three_settles_of_one_orphan_book_once(self):
         hid = self.orphan(0.10)
@@ -497,7 +510,7 @@ class SettleOnce(Base):
         self.assertEqual(self.ledger()["memo"][hid]["usd"], 0.03)   # the highest, not the last
         self.assertEqual(b.settle(hid, 0.035), "repeat")
         self.assertAlmostEqual(self.spent(), 0.035, places=9)
-        self.assertEqual(b.settle("other", "abc"), "unknown")       # a bad cost on a new id: the fallback
+        self.assertEqual(b.settle(HID("other"), "abc"), "unknown")       # a bad cost on a new id: the fallback
         self.assertAlmostEqual(self.spent(), 0.055, places=9)
 
     def test_36_memory_survives_a_restart(self):
@@ -519,46 +532,46 @@ class SettleOnce(Base):
     def test_37_forgotten_after_14_days_is_unknown_again(self):
         c = self.cap()
         r = c.reserve(); r.close()                      # released at t0
-        self.assertEqual(c.settle("x", 0.01), "unknown")   # settled at t0
+        self.assertEqual(c.settle(HID("x"), 0.01), "unknown")   # settled at t0
         self.clock.t += self.DAYS14 - 1
-        self.assertEqual(c.settle("x", 0.01), "repeat")    # still remembered, and remembered afresh from now
+        self.assertEqual(c.settle(HID("x"), 0.01), "repeat")    # still remembered, and remembered afresh from now
         self.assertEqual(c.settle(r.hold_id, 0.01), "released")   # a released id is not remembered afresh
         self.clock.t += 1                               # 14 days after the release
         self.assertEqual(c.settle(r.hold_id, 0.01), "unknown")    # forgotten: booked in full, the safe side
         self.assertAlmostEqual(self.spent(), 0.01, places=9)
-        self.assertEqual(c.settle("x", 0.01), "repeat")
+        self.assertEqual(c.settle(HID("x"), 0.01), "repeat")
         self.clock.t += self.DAYS14 - 1
-        self.assertEqual(sorted(self.ledger()["memo"]), sorted(["x", r.hold_id]))
+        self.assertEqual(sorted(self.ledger()["memo"]), sorted([HID("x"), r.hold_id]))
         self.clock.t += 1
-        self.assertEqual(c.settle("x", 0.01), "unknown")
-        self.assertEqual(list(self.ledger()["memo"]), ["x"])   # the other one aged out in the same step
+        self.assertEqual(c.settle(HID("x"), 0.01), "unknown")
+        self.assertEqual(list(self.ledger()["memo"]), [HID("x")])   # the other one aged out in the same step
         short = SpendCap(os.path.join(self.tmp.name, "s.json"), 1.0, clock=self.clock, settle_memory_s=60)
         self.addCleanup(short.close)
-        self.assertEqual(short.settle("y", 0.01), "unknown")
+        self.assertEqual(short.settle(HID("y"), 0.01), "unknown")
         self.clock.t += 59
-        self.assertEqual(short.settle("y", 0.01), "repeat")
+        self.assertEqual(short.settle(HID("y"), 0.01), "repeat")
         self.clock.t += 60
-        self.assertEqual(short.settle("y", 0.01), "unknown")
+        self.assertEqual(short.settle(HID("y"), 0.01), "unknown")
 
     def test_38_memory_max_forgets_the_oldest(self):
         c = self.cap(settle_memory_max=2)
         for hid in ("a", "b", "c"):
-            self.assertEqual(c.settle(hid, 0.01), "unknown")
+            self.assertEqual(c.settle(HID(hid), 0.01), "unknown")
             self.clock.t += 1
-        self.assertEqual(sorted(self.ledger()["memo"]), ["b", "c"])   # the oldest went, the newest stayed
-        self.assertEqual(c.settle("c", 0.01), "repeat")
-        self.assertEqual(c.settle("a", 0.01), "unknown")              # forgotten: booked in full again
-        self.assertEqual(sorted(self.ledger()["memo"]), ["a", "c"])
+        self.assertEqual(sorted(self.ledger()["memo"]), sorted([HID("b"), HID("c")]))   # the oldest went, the newest stayed
+        self.assertEqual(c.settle(HID("c"), 0.01), "repeat")
+        self.assertEqual(c.settle(HID("a"), 0.01), "unknown")              # forgotten: booked in full again
+        self.assertEqual(sorted(self.ledger()["memo"]), sorted([HID("a"), HID("c")]))
         self.assertAlmostEqual(self.spent(), 0.04, places=9)
         tie = SpendCap(os.path.join(self.tmp.name, "tie.json"), 1.0, clock=self.clock, settle_memory_max=2)
         self.addCleanup(tie.close)
         for hid in ("b", "a", "c"):                     # all in the same second
-            tie.settle(hid, 0.01)
+            tie.settle(HID(hid), 0.01)
         with open(os.path.join(self.tmp.name, "tie.json")) as f:
-            self.assertEqual(sorted(json.load(f)["memo"]), ["b", "c"])   # equally old: the smaller id goes
+            self.assertEqual(sorted(json.load(f)["memo"]), sorted([HID("b"), HID("c")]))   # equally old: the smaller id goes
         none = SpendCap(os.path.join(self.tmp.name, "none.json"), 1.0, clock=self.clock, settle_memory_max=0)
         self.addCleanup(none.close)
-        self.assertEqual([none.settle("z", 0.01) for _ in range(2)], ["unknown", "unknown"])   # nothing kept
+        self.assertEqual([none.settle(HID("z"), 0.01) for _ in range(2)], ["unknown", "unknown"])   # nothing kept
         for kw in ({"settle_memory_s": -1}, {"settle_memory_s": float("nan")}, {"settle_memory_s": None},
                    {"settle_memory_s": "60"}, {"settle_memory_s": True}, {"settle_memory_max": -1},
                    {"settle_memory_max": 2.5}, {"settle_memory_max": True}, {"settle_memory_max": None}):
@@ -616,7 +629,7 @@ class SettleOnce(Base):
             self.assertEqual(self.ledger()["memo"], {})
             self.assertEqual(self.ledger()["spent_usd"], 0.05)
             self.assertEqual(sorted(self.ledger()["holds"]), sorted(list(old.get("holds", {})) + [r.hold_id]))
-            self.assertEqual(c.settle("before-the-upgrade", 0.01), "unknown")   # every old id is unknown
+            self.assertEqual(c.settle(HID("before-the-upgrade"), 0.01), "unknown")   # every old id is unknown
             self.assertAlmostEqual(self.spent(), 0.06, places=9)
             c.close()
 
@@ -651,17 +664,17 @@ class SettleOnce(Base):
         with open(self.path, "w") as f: f.write("{broken")
         c = self.cap(0.10)
         with self.assertLogs("spend_cap", "ERROR"):
-            self.assertEqual(c.settle("x", 0.05), "unknown")   # booked and remembered in memory only
-            self.assertEqual(c.settle("x", 0.05), "repeat")
-            self.assertEqual(c.settle("y", 0.01), "unknown")   # the ledger knows better, but cannot be read
+            self.assertEqual(c.settle(HID("x"), 0.05), "unknown")   # booked and remembered in memory only
+            self.assertEqual(c.settle(HID("x"), 0.05), "repeat")
+            self.assertEqual(c.settle(HID("y"), 0.01), "unknown")   # the ledger knows better, but cannot be read
         with open(self.path, "w") as f:
             json.dump({"day": "2026-10-09", "spent_usd": 0.0, "holds": {}, "memo": {
-                "y": {"k": "released", "usd": 0.0, "at": DAY1}}}, f)
-        self.assertEqual(c.settle("x", 0.05), "repeat")        # the repaired ledger gets the costs and x's id
-        self.assertEqual(c.settle("y", 0.05), "released")      # and what it remembered itself of an id stands
+                HID("y"): {"k": "released", "usd": 0.0, "at": DAY1}}}, f)
+        self.assertEqual(c.settle(HID("x"), 0.05), "repeat")        # the repaired ledger gets the costs and x's id
+        self.assertEqual(c.settle(HID("y"), 0.05), "released")      # and what it remembered itself of an id stands
         self.assertAlmostEqual(self.spent(), 0.06, places=9)   # y's 0.01 stays booked: counted too much, not too little
-        self.assertEqual(self.ledger()["memo"], {"y": {"k": "released", "usd": 0.0, "at": DAY1},
-                                                 "x": {"k": "settled", "usd": 0.05, "at": DAY1 + 3600}})
+        self.assertEqual(self.ledger()["memo"], {HID("y"): {"k": "released", "usd": 0.0, "at": DAY1},
+                                                 HID("x"): {"k": "settled", "usd": 0.05, "at": DAY1 + 3600}})
 
     def test_43_only_a_normal_close_is_remembered_as_released(self):
         c = self.cap(0.20)
@@ -679,7 +692,7 @@ class SettleOnce(Base):
         self.assertAlmostEqual(self.spent(), 0.018, places=9)
 
     def test_44_orphan_hold_that_is_also_remembered_released_is_settled(self):   # P1, rosenrot
-        hid = "h" * 32                                      # a hand-merged ledger: the id is both
+        hid = "a" * 32                                      # a hand-merged ledger: the id is both
         with open(self.path, "w") as f:
             json.dump({"day": "2026-10-09", "spent_usd": 0.0,
                        "holds": {hid: {"day": "2026-10-09", "usd": 0.06, "in_flight": 1, "at": DAY1 + 60}},
@@ -694,16 +707,16 @@ class SettleOnce(Base):
         self.assertAlmostEqual(self.spent(), 0.05, places=9)
 
     def test_45_ledger_over_memory_max_is_trimmed_at_the_first_roll(self):   # P2, rosenrot
-        memo = {hid: {"k": "settled", "usd": 0.01, "at": DAY1 + i} for i, hid in enumerate("abcd")}
+        memo = {HID(hid): {"k": "settled", "usd": 0.01, "at": DAY1 + i} for i, hid in enumerate("abcd")}
         with open(self.path, "w") as f:
             json.dump({"day": "2026-10-09", "spent_usd": 0.04, "holds": {}, "memo": memo}, f)
         c = self.cap(settle_memory_max=2)
         self.assertEqual(c.fail_code, None)                 # reading does not trim and does not write
-        self.assertEqual(sorted(self.ledger()["memo"]), ["a", "b", "c", "d"])
+        self.assertEqual(sorted(self.ledger()["memo"]), sorted(HID(x) for x in "abcd"))
         self.assertIsNotNone(c.reserve())                   # remembers nothing itself: only _roll trims
-        self.assertEqual(sorted(self.ledger()["memo"]), ["c", "d"])   # the oldest two went first
-        self.assertEqual(c.settle("a", 0.01), "unknown")    # forgotten: booked in full again
-        self.assertEqual(c.settle("d", 0.01), "repeat")
+        self.assertEqual(sorted(self.ledger()["memo"]), sorted(HID(x) for x in "cd"))   # the oldest two went first
+        self.assertEqual(c.settle(HID("a"), 0.01), "unknown")    # forgotten: booked in full again
+        self.assertEqual(c.settle(HID("d"), 0.01), "repeat")
 
 
     def test_46_corrupt_memo_reads_leave_exact_bytes(self):   # P3, theone
@@ -754,15 +767,15 @@ class SettleOnce(Base):
         self.assertAlmostEqual(self.spent(), 0.03, places=9)
         twin = SpendCap(os.path.join(self.tmp.name, "twin.json"), 2.00, clock=self.clock)
         self.addCleanup(twin.close)
-        self.assertEqual([twin.settle("t", x) for x in (0.01, 0.03, 0.02)], ["unknown", "repeat", "repeat"])
-        b.settle_line("t", 0.01); b.settle_line("t", 0.03); b.settle_line("t", 0.02)
+        self.assertEqual([twin.settle(HID("t"), x) for x in (0.01, 0.03, 0.02)], ["unknown", "repeat", "repeat"])
+        b.settle_line(HID("t"), 0.01); b.settle_line(HID("t"), 0.03); b.settle_line(HID("t"), 0.02)
         with open(os.path.join(self.tmp.name, "twin.json")) as f:
-            self.assertEqual(self.ledger()["memo"]["t"], json.load(f)["memo"]["t"])   # same memo as plain settle()
+            self.assertEqual(self.ledger()["memo"][HID("t")], json.load(f)["memo"][HID("t")])   # same memo as plain settle()
         self.assertAlmostEqual(self.spent(), 0.06, places=9)
         r = b.reserve(); r.close()
         self.assertEqual(b.settle_line(r.hold_id, 0.05), "released")
-        self.assertEqual(b.settle_line("never-seen", 1), "unknown")
-        self.assertEqual(b.settle_line("never-seen", 1), "repeat 1")
+        self.assertEqual(b.settle_line(HID("never-seen"), 1), "unknown")
+        self.assertEqual(b.settle_line(HID("never-seen"), 1), "repeat 1")
         live = b.reserve(); self.assertTrue(live.begin())
         self.assertEqual(b.settle_line(live.hold_id, 0.01), "live")
         self.assertEqual(b.settle_line("", 0.01), "invalid")
@@ -820,7 +833,7 @@ class SettleOnce(Base):
                 with self.fail_write(where), self.assertLogs("spend_cap", "ERROR"):
                     self.assertEqual([b.settle_line(hid, x) for x in (0.01, 0.03, 0.02)],
                                      ["settled 0.01" + mark] + ["repeat 0.03" + (later or mark)] * 2)
-                    self.assertEqual(b.settle_line("never-seen", 1), "unknown")       # P7: prints alone
+                    self.assertEqual(b.settle_line(HID("never-seen"), 1), "unknown")       # P7: prints alone
                     self.assertEqual(b.settle_line("", 1), "invalid")
                     r = b.reserve()                                                  # must_persist: refused
                     self.assertIsNone(r)

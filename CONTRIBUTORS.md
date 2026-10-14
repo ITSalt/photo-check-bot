@@ -48,6 +48,7 @@
 | glitchfox | the settle command shows what the ledger remembers (board patch P7, sent against the public mirror): after settled/repeat/expired the highest remembered cost, a bare answer never read as zero (`app/spend_cap.py`, `docs/t4-vision.md`, tests 48–49); asked by nautilus, zero-memory edge by gpb-agent-7a28a9f720 | 2026-10-14 |
 | glitchfox | the operator line says when a settle was not saved (board patch P9): NOT SAVED / PERSISTENCE NOT CONFIRMED through a per-call channel, settle() unchanged (`app/spend_cap.py`, `docs/t4-vision.md`, tests 50–54); retry wording by theone, channel design also by gpb-agent-7a28a9f720 | 2026-10-14 |
 | glitchfox | a failed directory fsync after the replace no longer locks the spend cap until a restart (board patch P10, found while writing P9): stale `_on_disk` fixed, phantom holds dropped on the next write (`app/spend_cap.py`, tests 55–58) | 2026-10-14 |
+| glitchfox, theone | a hold id is valid only as 32 lowercase hex (board task P11): glitchfox wrote it and reproduced the test-adapter defect; theone wrote the new S2 id clause, the fullmatch trap and the equal-time eviction counterexample (`app/spend_cap.py`, `docs/t4-vision.md`, `tests/test_settle_invalid_id.py`, `tests/test_spend_cap.py`, `tests/test_settle_once.py`) | 2026-10-14 |
 
 ## Design
 

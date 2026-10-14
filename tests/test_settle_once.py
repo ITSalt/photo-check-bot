@@ -35,6 +35,25 @@ import collections, copy, datetime, hashlib, json, logging, os, random, sys, tem
 from unittest import mock
 
 from app.spend_cap import Reservation, SpendCap
+
+import re as _re
+
+
+def canonical_id(name):
+    """P11 canonical-ID adapter (test-only, not part of the accepted oracle or the fixture).
+
+    SpendCap.settle() now refuses anything but 32 lowercase hex, while the oracle accepts any string.
+    The adapter maps a name ONCE, before dispatch, and the SAME canonical id is handed to both the
+    oracle and the real SpendCap. Mapping only the real side is wrong: memo eviction breaks equal-age
+    ties by the smaller id, and MD5 does not preserve the order of the raw names (theone, board #87403:
+    MD5("c") < MD5("b") although "b" < "c"). 32-hex names pass through unchanged."""
+    if isinstance(name, str) and _re.fullmatch(r"[0-9a-f]{32}", name):
+        return name
+    return hashlib.md5(str(name).encode()).hexdigest()
+
+
+_hid = canonical_id                             # the real side's lookup of a never-reserved name
+
 from tests import settle_once_model as model
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -70,7 +89,7 @@ class Real:
         self.shapes = set()
 
     def hold_id(self, name):
-        return self.ids.setdefault(name, name)    # never reserved: the name itself is the made-up id
+        return self.ids.setdefault(name, _hid(name))  # P11: never reserved -> stable 32-hex
 
     def ledger(self):
         with open(self.path) as f:
@@ -178,7 +197,7 @@ class Differential(Quiet):
 
     def trace(self, seed, seen, steps=STEPS):
         next_id = []
-        with mock.patch.object(uuid, "uuid4", lambda: types.SimpleNamespace(hex=next_id[-1])):
+        with mock.patch.object(uuid, "uuid4", lambda: types.SimpleNamespace(hex=_hid(next_id[-1]))):
             self.one_trace(seed, seen, steps, next_id)
 
     def one_trace(self, seed, seen, steps, next_id):
@@ -209,6 +228,8 @@ class Differential(Quiet):
             elif op == "settle":
                 ids = known[-8:] if known and rng.random() < 0.8 else ["z0", "z1", "z2"]   # mostly real holds
                 e.update(id=rng.choice(ids), usd=rng.choice([0, 5000, 10000, 30000, 65000]))
+            if e.get("id") is not None:
+                e["id"] = canonical_id(e["id"])                   # P11: one canonical id for oracle AND real
             given = copy.deepcopy(s)
             s2, r = model.apply(s, e, cfg)
             self.assertEqual(s, given, "apply changed the state it was given")
@@ -220,7 +241,8 @@ class Differential(Quiet):
             got = real.apply(e)                                   # the ledger drops them at the next operation
             where = (seed, step, e, cfg)
             self.assertEqual(got, (r["result"], r["booked"], counted), where)
-            self.assertEqual(real.ids.get(e.get("id"), e.get("id")), e.get("id"), where)   # the same ids on both sides
+            if e.get("id") is not None:
+                self.assertEqual(real.hold_id(e["id"]), e["id"], where)   # P11: canonical ids reach settle() unchanged
             led = real.ledger()                                   # and the whole state, not only the totals
             self.assertEqual(led["spent"], s["spent"], where)
             self.assertEqual(led["day"], day_of(s["day"] * 86400), where)
@@ -247,6 +269,64 @@ class Differential(Quiet):
             settles = {k[1]: v for k, v in sorted(seen.items()) if k[0] == "settle"}
             print("\nreal SpendCap vs model: %d traces, %d steps, all agree; settle results %s"
                   % (TRACES, steps, settles), file=sys.stderr)
+
+
+class EqualTimeEvictionControl(Quiet):
+    """P11: deterministic control for the canonical-ID adapter (theone, board #87403).
+
+    memory_max=1, no expiry: settle b and c in the same second, then one second later settle b again.
+    The eviction tie is broken by the smaller id, so the outcome of the third settle depends on the
+    ORDER of the ids. With one canonical id on both sides the oracle and the real SpendCap must agree
+    on every result, every booking and the whole remembered state; the raw names would order the other
+    way, which is why only-real-side mapping was a defect."""
+
+    CFG = {"cap": 2_000_000, "lifetime": float("inf"), "memory": 1209600, "memory_max": 1}
+    T0 = 20000 * 86400 + 3600
+
+    def events(self, mapped):
+        f = canonical_id if mapped else (lambda n: n)
+        return [{"op": "settle", "t": self.T0, "id": f("b"), "usd": 10000},
+                {"op": "settle", "t": self.T0, "id": f("c"), "usd": 10000},
+                {"op": "settle", "t": self.T0 + 1, "id": f("b"), "usd": 10000}]
+
+    def oracle(self, events):
+        s, out = model.new_state(), []
+        for e in events:
+            s, r = model.apply(s, e, self.CFG)
+            s = json.loads(json.dumps(s))
+            out.append((r["result"], r["booked"]))
+        return s, out
+
+    def test_raw_and_canonical_order_differ_so_the_control_bites(self):
+        self.assertLess("b", "c")
+        self.assertLess(canonical_id("c"), canonical_id("b"))
+        raw_state, raw = self.oracle(self.events(mapped=False))
+        can_state, can = self.oracle(self.events(mapped=True))
+        self.assertEqual((raw[2], raw_state["spent"]), (("unknown", 10000), 30000))   # b was evicted
+        self.assertEqual((can[2], can_state["spent"]), (("repeat", 0), 20000))        # c was evicted
+
+    def test_mapping_only_the_real_side_diverges(self):
+        """The P11 adapter as first submitted: raw names to the oracle, MD5 only inside Real."""
+        real = Real(self, self.CFG["cap"], None, self.T0, settle_memory_s=self.CFG["memory"],
+                    settle_memory_max=self.CFG["memory_max"])
+        _, want = self.oracle(self.events(mapped=False))
+        got = [real.apply(e)[:2] for e in self.events(mapped=False)]
+        self.assertEqual(got[:2], want[:2])
+        self.assertEqual((got[2], want[2]), (("repeat", 0), ("unknown", 10000)))
+
+    def test_real_spend_cap_agrees_with_the_oracle_on_canonical_ids(self):
+        events = self.events(mapped=True)
+        real = Real(self, self.CFG["cap"], None, self.T0, settle_memory_s=self.CFG["memory"],
+                    settle_memory_max=self.CFG["memory_max"])
+        s = model.new_state()
+        for step, e in enumerate(events):
+            s, r = model.apply(s, e, self.CFG)
+            s = json.loads(json.dumps(s))
+            got = real.apply(e)
+            self.assertEqual(got, (r["result"], r["booked"], model.counted(s, e["t"], self.CFG)), step)
+            led = real.ledger()
+            self.assertEqual((led["spent"], led["memory"]), (s["spent"], s["memory"]), step)
+        self.assertEqual(real.ledger()["spent"], 20000)
 
 
 if __name__ == "__main__":
