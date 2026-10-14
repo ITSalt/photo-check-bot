@@ -809,8 +809,8 @@ class SettleOnce(Base):
     def test_50_settle_line_says_when_its_write_failed(self):   # P9, glitchfox (review theone)
         for where, mark, later in (("write", " PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)", None),
                                    ("replace", " NOT SAVED (LEDGER_WRITE)", None),
-                                   # the bytes did land, _on_disk was not updated: the next call fails closed
-                                   ("dirsync", " PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)", " NOT SAVED (LEDGER_CHANGED)")):
+                                   # P10: after replace, _on_disk matches; later calls stay PERSISTENCE NOT CONFIRMED, not sticky LEDGER_CHANGED
+                                   ("dirsync", " PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)", None)):
             with self.subTest(where=where):
                 self.tmp.cleanup(); os.makedirs(self.tmp.name)
                 self.clock.t = DAY1 + 3600
@@ -888,6 +888,71 @@ class SettleOnce(Base):
             f.write(b" ")                                             # someone else changed the file
         with self.assertLogs("spend_cap", "ERROR"):
             self.assertEqual(b.settle_line(hid, 0.01), "settled 0.01 NOT SAVED (LEDGER_CHANGED)")
+
+    def test_55_dirsync_fail_after_record_allows_later_reserves(self):  # P10, glitchfox: 0/5 -> 5/5
+        c = self.cap()
+        r = c.reserve()
+        self.assertIsNotNone(r)
+        self.assertTrue(r.begin())
+        with self.fail_write("dirsync"), self.assertLogs("spend_cap", "ERROR"):
+            r.record(0.01)
+        self.assertIsNone(c.fail_code)
+        granted = 0
+        for _ in range(5):
+            rr = c.reserve()
+            if rr is not None:
+                granted += 1
+                rr.close()
+        self.assertEqual(granted, 5)
+
+    def test_56_second_writer_still_ledger_changed(self):  # P10: real external change unchanged
+        c = self.cap()
+        self.assertIsNotNone(c.reserve())
+        with open(self.path, "ab") as f:
+            f.write(b" ")
+        self.assertEqual(c.fail_code, "LEDGER_CHANGED")
+        with self.assertLogs("spend_cap", "ERROR"):
+            self.assertIsNone(c.reserve())
+
+    def test_57_dirsync_fail_on_reserve_drops_phantom_on_next_write(self):  # P10, orchestrator case
+        c = self.cap()
+        keeper = c.reserve()
+        self.assertIsNotNone(keeper)
+        keeper_id = keeper.hold_id
+        spent0 = self.ledger()["spent_usd"]
+        holds_before = set(self.ledger()["holds"])
+        self.assertEqual(holds_before, {keeper_id})
+        with self.fail_write("dirsync"), self.assertLogs("spend_cap", "ERROR"):
+            self.assertIsNone(c.reserve())  # must_persist: memory rolled back, file may hold phantom
+        on_disk = set(self.ledger()["holds"])
+        self.assertEqual(len(on_disk - holds_before), 1)  # phantom hold landed on disk
+        phantom = (on_disk - holds_before).pop()
+        self.assertIsNone(c.fail_code)  # not sticky LEDGER_CHANGED
+        nxt = c.reserve()
+        self.assertIsNotNone(nxt)
+        led = self.ledger()
+        self.assertNotIn(phantom, led["holds"])       # next successful write dropped the phantom
+        self.assertIn(keeper_id, led["holds"])        # other holds kept
+        self.assertIn(nxt.hold_id, led["holds"])
+        self.assertAlmostEqual(led["spent_usd"], spent0, places=9)
+
+    def test_58_dirsync_fail_on_begin_drops_phantom_inflight(self):  # P10, orchestrator begin case
+        c = self.cap()
+        r = c.reserve()
+        self.assertIsNotNone(r)
+        before = self.ledger()["holds"][r.hold_id]["in_flight"]
+        with self.fail_write("dirsync"), self.assertLogs("spend_cap", "ERROR"):
+            self.assertFalse(r.begin())  # must_persist rollback in memory
+        self.assertEqual(self.ledger()["holds"][r.hold_id]["in_flight"], before + 1)  # phantom in-flight on disk
+        self.assertIsNone(c.fail_code)
+        # next successful write from memory (in_flight still before) drops the phantom bump
+        r.record(0.0)  # or close path — use a good write via record of 0? record uses must_persist False
+        # better: another reserve to force must_persist write of current memory
+        r2 = c.reserve()
+        self.assertIsNotNone(r2)
+        self.assertEqual(self.ledger()["holds"][r.hold_id]["in_flight"], before)
+        r2.close()
+
 
 
 if __name__ == "__main__":
