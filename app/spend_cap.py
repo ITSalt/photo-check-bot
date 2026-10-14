@@ -316,6 +316,7 @@ class SpendCap:
         raw = self._encode()
         d = os.path.dirname(self._path)
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".spend_cap.", suffix=".tmp")
+        replaced = False
         try:
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "wb") as f:
@@ -323,12 +324,15 @@ class SpendCap:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self._path)
+            replaced = True
             dfd = os.open(d, os.O_RDONLY)        # make the rename itself durable
             try:
                 os.fsync(dfd)
             finally:
                 os.close(dfd)
-        except BaseException:
+        except BaseException as e:
+            if isinstance(e, OSError):
+                e.spend_cap_replaced = replaced  # P9: False = the ledger file was not touched
             try:
                 os.unlink(tmp)
             except OSError:
@@ -336,10 +340,12 @@ class SpendCap:
             raise
         self._on_disk = raw
 
-    def _change(self, apply, must_persist, what=""):
+    def _change(self, apply, must_persist, what="", unsaved=None):
         """Load/verify, roll the day, apply a change to memory, write it. Returns apply()'s result.
         must_persist: undo the change and raise if the write fails (reserve, begin).
-        what: hold id and amount, logged when a change stays in memory only."""
+        what: hold id and amount, logged when a change stays in memory only.
+        unsaved: a dict of this one call (P9); set to {"code": ..., "maybe": bool} when the change stays
+        in memory: "maybe" False = the ledger file was not touched, True = written but not confirmed."""
         today = self._today()
         code = None
         if self._closed:
@@ -355,6 +361,8 @@ class SpendCap:
             log.error("spend_cap_error code=%s%s", code, what)
             if must_persist:
                 raise _LedgerCorrupt
+            if unsaved is not None:
+                unsaved.update(code=code, maybe=False)
             self._roll(today)
             return apply(today)                  # keep the cost counted in memory; the file is left
                                                  # untouched for a human to look at
@@ -364,11 +372,13 @@ class SpendCap:
         out = apply(today)
         try:
             self._write()
-        except OSError:
+        except OSError as e:
             log.error("spend_cap_error code=LEDGER_WRITE%s", what)
             if must_persist:
                 self._day, self._spent, self._holds = undo
                 raise
+            if unsaved is not None:              # unknown where it failed: claim only "not confirmed"
+                unsaved.update(code="LEDGER_WRITE", maybe=getattr(e, "spend_cap_replaced", True))
         return out
 
     # -- public
@@ -434,8 +444,14 @@ class SpendCap:
         "unknown": never seen, or forgotten; the cost is booked in full: money spent is money spent;
         "live": the hold belongs to an open Reservation: nothing booked, use its record();
         "invalid": id is not a non-empty string; no state, clock or ledger access (S2, theone)."""
+        return self._settle(hold_id, cost_usd)[0]
+
+    def _settle(self, hold_id, cost_usd):
+        """settle() for settle_line (P9): (answer, amount remembered now in micro-dollars or None, unsaved),
+        all from this one call under one lock. unsaved is {} when the ledger write went through."""
+        unsaved = {}
         if not isinstance(hold_id, str) or hold_id == "":
-            return "invalid"
+            return "invalid", None, unsaved
         amount = _money(cost_usd)
         if amount is None:
             amount = self._fallback
@@ -459,26 +475,35 @@ class SpendCap:
                     self._spent += booked
                     self._remember(hold_id, "settled", high)
                     return out
-                return self._change(apply, must_persist=False, what=f" hold={hold_id} usd={amount / _M:.6f}")
+                out = self._change(apply, must_persist=False, what=f" hold={hold_id} usd={amount / _M:.6f}",
+                                   unsaved=unsaved)
+                m = self._memo.get(hold_id)
+                return out, (m.usd if m is not None and m.kind == "settled" else None), unsaved
         except Exception:
             log.error("spend_cap_error code=INTERNAL hold=%s usd=%.6f", hold_id, amount / _M)
-            return "unknown"
+            return "unknown", None, {}
 
     def settle_line(self, hold_id, cost_usd):
         """settle() as the operator command prints it (board patch P7, glitchfox; asked by nautilus).
         After "settled", "repeat" or "expired" comes the highest cost now remembered for the id, in USD
         as the ledger writes it, e.g. "repeat 0.03": a repeat shows what the ledger holds, not only that
         it was seen. The other answers print alone. Only reads memory after settle(): nothing more is
-        booked, remembered or written."""
-        out = self.settle(hold_id, cost_usd)
+        booked, remembered or written.
+        If this call's ledger write failed, a marker follows (P9, glitchfox; review theone):
+        "NOT SAVED (code)" when the file was not touched, "PERSISTENCE NOT CONFIRMED (LEDGER_WRITE)" when
+        it may hold the new bytes. Retry accounting depends on retained evidence: a retained settled memo
+        makes a same-cost rerun book nothing new; a missing, expired or evicted memo may return unknown
+        and book the full cost again. A persistence warning alone does not establish whether the earlier
+        accounting reached disk; do not infer that an unconditional rerun is non-incrementing."""
+        out, high, unsaved = self._settle(hold_id, cost_usd)
         if out not in ("settled", "repeat", "expired"):
             return out
-        with self._lock:
-            m = self._memo.get(hold_id)
-            if m is None or m.kind != "settled":   # forgotten at once (settle_memory_max=0)
-                return out
-            usd = f"{m.usd // _M}.{m.usd % _M:06d}".rstrip("0").rstrip(".")
-        return f"{out} {usd}"
+        line = out
+        if high is not None:                     # None: forgotten at once (settle_memory_max=0)
+            line += " " + f"{high // _M}.{high % _M:06d}".rstrip("0").rstrip(".")
+        if unsaved:
+            line += (" PERSISTENCE NOT CONFIRMED" if unsaved["maybe"] else " NOT SAVED") + f" ({unsaved['code']})"
+        return line
 
     def _begin(self, hid):
         with self._lock:
