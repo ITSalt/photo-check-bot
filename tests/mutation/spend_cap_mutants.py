@@ -3,6 +3,19 @@ import os, shutil, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the repository root
 SRC = open(os.path.join(HERE, "app", "spend_cap.py")).read()
 MUTANTS = [
+    # S1 under-counting mutants (P4, theone). Each changes one accounting rule.
+    ('settle repeat never books an increase',
+     '                    booked = high - m.usd',
+     '                    booked = 0'),
+    ('settle expired books nothing',
+     '                    elif m is not None and m.kind == "expired":\n                        out = "expired"',
+     '                    elif m is not None and m.kind == "expired":\n                        out, booked = "expired", 0'),
+    ('settle unknown books nothing',
+     '                    out, booked, high = "unknown", amount, amount',
+     '                    out, booked, high = "unknown", amount, amount\n                    if h is None and m is None:\n                        booked = 0'),
+    ('expired id remembered as released',
+     '            self._remember(hid, "expired")',
+     '            self._remember(hid, "released")'),
     ("v2 hold read as taken at the start of its day",
      "timestamp() + 86400\n", "timestamp()\n"),
     ("v2 hold persisted with an at outside its day",

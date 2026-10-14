@@ -579,6 +579,12 @@ The command is the same as before; what it prints:
 - `unknown`: the id was never seen, or it was forgotten (14 days after it was last remembered,
   or pushed out by 2000 newer ids). The cost is booked in full.
 - `live`: the hold belongs to a running check. Nothing is booked.
+- `invalid`: the id is not a string, or is the empty string. Nothing is booked and no state,
+  clock or ledger access occurs. Retype the command with the correct id.
+
+Every non-empty string is a valid id, including `" "`, `"5"` and `"ab"`; there is no 32-hex
+format requirement. An unfamiliar non-empty string follows `unknown` and books in full, so
+copy the actual hold id from the log rather than guessing it.
 
 Running the same command twice is safe. A cost typed too low is corrected by settling again
 with the right total. A cost typed too high cannot be lowered: it over-counts until the day

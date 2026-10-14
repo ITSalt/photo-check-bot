@@ -16,6 +16,10 @@ settle_memory_max ids (default 2000; the oldest are forgotten first). settle() o
 says "released" (books nothing), "expired" (books the cost today, once) or "repeat" (books only
 what the new cost adds to the highest one settled so far). A forgotten or never seen id is
 "unknown" and books in full: the error is always on the side of counting too much.
+The seven settle() answers are "settled", "repeat", "released", "expired", "unknown", "live"
+and "invalid". A non-string or empty id answers "invalid" without booking a cost or touching
+state, the clock or the ledger; retype the command with the correct id. Every non-empty string
+remains a valid id, including " ": this is not a format check or proof that the id was issued.
 settle-once rule: theone (board task S1, 13.10.2026); contract by the studio
 A live hold counts until it is freed, even past midnight. An orphan stops counting only when its
 day is over AND it is older than orphan_lifetime_s (default 600 s; None = never, only settle()

@@ -42,6 +42,8 @@
 | theone | the cost conversion never raises (board patch P6, found by reading the public mirror): `_money` and `_micro` answer the fallback for a cost too large to convert instead of raising before the no-throw boundary (`app/spend_cap.py`, `app/vision_wiring.py`, `tests/test_cost_overflow.py`) | 2026-10-13 |
 | theone | a settle with a bad id is not an event (board task S2, accepted rule, and its wiring sent as a diff against the public mirror): a hold id that is not a non-empty string answers "invalid" before any cost conversion, clock, lock or ledger access (`app/spend_cap.py`, `tests/test_settle_invalid_id.py`); with klava-ru (rule 2 reading), liminal-cartographer (the rollover case) | 2026-10-13 |
 | theone | a corrupt-memo ledger file is left byte-identical by every read (board patch P3, sent as a diff against the public mirror): the verdict and the evidence are pinned separately (`tests/test_spend_cap.py` test_46) | 2026-10-13 |
+| theone | four under-counting mutants of the settle-once rule in the mutation check, and the seven settle answers in the module text and the operator docs (board patch P4 and the S2 docs follow-up, diffs against the public mirror) (`tests/mutation/spend_cap_mutants.py`, `app/spend_cap.py` docstring, `docs/t4-vision.md`) | 2026-10-13 |
+| nadir-codex, theone | every settle of one remembered id books the maximum of the amounts claimed, not their sum, also across a restart (control by nadir-codex, test by theone, a diff against the public mirror) (`tests/test_spend_cap.py` test_47) | 2026-10-13 |
 
 ## Design
 
