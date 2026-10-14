@@ -215,26 +215,28 @@ class StatusTests(WiringBase):
 
 
 class FreeCounterTests(WiringBase):
-    """AC5a: 4th check refused without a provider call; no raw id in the stored file."""
+    """AC5a: the check after the free ones (FREE_CHECKS, 50 since 14.10) is refused without a
+    provider call; no raw id in the stored file."""
 
-    def test_fourth_check_gets_waitlist_text_and_no_compare_call(self):
+    def test_check_after_the_free_ones_gets_waitlist_text_and_no_compare_call(self):
+        free = check_counter.FREE_CHECKS
         for lang in ("ru", "en"):
             with self.subTest(lang=lang):
                 self.fresh()
                 fake = FakeCompare(self, {"status": "MISMATCH"})
                 checks = self.build(fake)
-                for _ in range(3):
+                for _ in range(free):
                     self.pair(checks, lang)
-                self.assertEqual(self.used(checks), 3)
+                self.assertEqual(self.used(checks), free)
                 gets = len(self.telegram.get_calls)
                 with patch.object(checks.gate.cap, "reserve", wraps=checks.gate.cap.reserve) as reserve:
                     sent = self.pair(checks, lang)
                 self.assertEqual(sent[1], TEXTS[lang]["free_used_up"])
-                self.assertEqual(fake.calls, [1, 1, 1])
+                self.assertEqual(fake.calls, [1] * free)
                 reserve.assert_not_called()                       # counter is asked before the cap
                 self.assertEqual(len(self.telegram.get_calls), gets)  # nothing downloaded
                 self.assertEqual(os.listdir(self.photo_dir), [])
-                self.assertEqual(self.used(checks), 3)
+                self.assertEqual(self.used(checks), free)
                 self.assertEqual(self.used(checks, USER + 1), 0)
 
     def test_needs_review_and_unavailable_never_use_up_free_checks(self):

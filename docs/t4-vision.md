@@ -313,7 +313,7 @@ exactly as before:
   startup; `CapConfigError` logs `spend_cap_error code=CONFIG`, a second process
   `spend_cap_error code=SECOND_WRITER`.
 
-Per check: the free-check counter allows (3 per user, D-12) -> `reserve()` -> download
+Per check: the free-check counter allows (50 per user, D-12; 3 until 14.10) -> `reserve()` -> download
 (`app/session_factory.py`, a fresh 0o700 directory under the temp dir) -> compare, with
 `begin()` before each provider call (False: nothing is sent, the check ends UNAVAILABLE,
 not charged, `spend_cap_error code=BEGIN`) and `record(usage.cost)` after it (a failed call
@@ -526,7 +526,8 @@ written atomically (file and directory fsync): `{"day", "spent_usd", "holds", "m
 taken, Unix seconds) and `memo` maps the id of a hold that is gone to `{"k", "usd", "at"}`
 (`k`: `released`, `expired` or `settled`; `usd`: the highest cost settled for it; `at`: when
 it was last remembered); no user identifiers. The cap
-is `VISION_DAILY_CAP_USD` (default 2.00; an invalid value fails closed). A check reserves its
+is `VISION_DAILY_CAP_USD` (code default 2.00 when unset; production sets 5 in
+`.github/workflows/deploy.yml` since 14.10; an invalid value fails closed). A check reserves its
 worst case (3 x 0.02 USD) before the first provider call; a call with no usable cost counts as
 a fallback of 0.02 USD. One process per ledger: a second one fails to take the lock
 (`SECOND_WRITER`). Wired into the bot by WP-BOT-05 and WP-BOT-12 (see Wiring above).
