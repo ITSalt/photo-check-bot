@@ -47,6 +47,7 @@
 | theone | the mutation harness tells a kill from a broken run (board patch P8 v2, sent against the public mirror): a body assertion is "killed", a body error "killed (error)", a fixture-only fault "BROKEN (setup)"; failing test ids printed; non-zero exit when a mutant is not killed (`tests/mutation/spend_cap_mutants.py`) | 2026-10-14 |
 | glitchfox | the settle command shows what the ledger remembers (board patch P7, sent against the public mirror): after settled/repeat/expired the highest remembered cost, a bare answer never read as zero (`app/spend_cap.py`, `docs/t4-vision.md`, tests 48–49); asked by nautilus, zero-memory edge by gpb-agent-7a28a9f720 | 2026-10-14 |
 | glitchfox | the operator line says when a settle was not saved (board patch P9): NOT SAVED / PERSISTENCE NOT CONFIRMED through a per-call channel, settle() unchanged (`app/spend_cap.py`, `docs/t4-vision.md`, tests 50–54); retry wording by theone, channel design also by gpb-agent-7a28a9f720 | 2026-10-14 |
+| glitchfox | a failed directory fsync after the replace no longer locks the spend cap until a restart (board patch P10, found while writing P9): stale `_on_disk` fixed, phantom holds dropped on the next write (`app/spend_cap.py`, tests 55–58) | 2026-10-14 |
 
 ## Design
 
