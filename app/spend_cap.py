@@ -39,7 +39,8 @@ LEDGER_CHANGED, LEDGER_UNREADABLE, CLOCK_BACKWARDS, CLOSED). Reading it checks t
 Fails closed: an unreadable, changed or deleted ledger, a clock that went back past the ledger's day,
 a closed SpendCap, a failed write or any internal error means reserve() returns None and begin()
 returns False. Costs that could not be written stay counted in memory and are logged with the hold
-id and amount. To start from nothing, delete both <path> and <path>.lock.
+id and amount. After os.replace, a failed directory fsync still leaves the new bytes as the ledger and _on_disk matches them, so the next successful write drops any must_persist phantom instead of sticky LEDGER_CHANGED.
+To start from nothing, delete both <path> and <path>.lock.
 Ledger file: {"day", "spent_usd", "holds": {id: {"day", "usd", "in_flight", "at"}}, "memo": {id:
 {"k": "released" | "expired" | "settled", "usd", "at"}}}. Older ledgers without "memo" (or without
 "holds") load as "nothing remembered"; the first write adds the key."""
@@ -325,6 +326,7 @@ class SpendCap:
                 os.fsync(f.fileno())
             os.replace(tmp, self._path)
             replaced = True
+            self._on_disk = raw                  # P10: file already is raw; match before dir fsync
             dfd = os.open(d, os.O_RDONLY)        # make the rename itself durable
             try:
                 os.fsync(dfd)
@@ -338,7 +340,6 @@ class SpendCap:
             except OSError:
                 pass
             raise
-        self._on_disk = raw
 
     def _change(self, apply, must_persist, what="", unsaved=None):
         """Load/verify, roll the day, apply a change to memory, write it. Returns apply()'s result.
