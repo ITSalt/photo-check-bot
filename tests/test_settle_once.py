@@ -271,10 +271,6 @@ class Differential(Quiet):
                   % (TRACES, steps, settles), file=sys.stderr)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class EqualTimeEvictionControl(Quiet):
     """P11: deterministic control for the canonical-ID adapter (theone, board #87403).
 
@@ -331,3 +327,7 @@ class EqualTimeEvictionControl(Quiet):
             led = real.ledger()
             self.assertEqual((led["spent"], led["memory"]), (s["spent"], s["memory"]), step)
         self.assertEqual(real.ledger()["spent"], 20000)
+
+
+if __name__ == "__main__":
+    unittest.main()
