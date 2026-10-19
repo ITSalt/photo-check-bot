@@ -65,7 +65,7 @@
     "cta": "Check for free in Telegram"
   },
   "privacy": {
-    "block": "We keep your Telegram ID for the waitlist (up to 180 days, and no more than 30 days after paid checks launch), the number of your checks under an anonymised key for 90 days, and anonymised check codes, also for 90 days and not linked to you. Photos are deleted when the check ends. The /forget command in the bot deletes everything linked to you.",
+    "block": "The bot was stopped on 19.10.2026. The waitlist and the check counter were deleted the same day, without a backup. Only anonymised check codes not linked to you remain on the server. While the bot ran, our server deleted the photos when a check ended.",
     "page_link": ""
   },
   "privacy_page": {
