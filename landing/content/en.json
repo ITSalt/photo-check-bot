@@ -71,5 +71,10 @@
   "privacy_page": {
     "title": "",
     "sections": []
+  },
+  "closed": {
+    "note": "The experiment closed on 19.10.2026. On our test pairs, a plain question to a strong model (“is this the same item? can I publish it?”) warned the seller as often as the bot did, so the bot will not launch.",
+    "link_text": "Numbers and materials",
+    "link_url": "https://github.com/ITSalt/photo-check-gold"
   }
 }

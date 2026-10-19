@@ -115,12 +115,24 @@ def page(lang, other):
     h = c["hero"]
     start = f"landing_{lang}"
 
+    closed = c.get("closed", {})
+
     def cta(text, cls="cta", seg=""):
+        if closed.get("note"):   # the experiment is closed: no button invites a check
+            return ""
         payload = f"{start}__{seg}" if seg else start
         data = f' data-seg="{e(seg)}"' if seg else ""
         return f'<a class="{cls}" href="https://t.me/{BOT}?start={payload}"{data}>{e(text)}</a>'
 
     price = f'<p class="note">{e(h["price_note"])}</p>' if h.get("price_note") else ""
+    cta_note = f'<p class="note">{e(h["cta_note"])}</p>'
+    status = f'<section><p class="status">{e(c["status"]["text"])}</p>{cta(c["status"]["cta"])}</section>'
+    notice = ""
+    if closed.get("note"):
+        cta_note = price = status = ""
+        more = (f' <a href="{e(closed["link_url"])}">{e(closed["link_text"])}</a>'
+                if closed.get("link_url") and closed.get("link_text") else "")
+        notice = f'<p class="status">{e(closed["note"])}{more}</p>\n'
     problems = "".join(f'<div class="card"><h3>{e(i["title"])}</h3><p>{e(i["text"])}</p></div>' for i in c["problems"]["items"])
     steps = "".join(f"<li>{e(s)}</li>" for s in c["how"]["steps"])
     groups = ""
@@ -137,11 +149,11 @@ def page(lang, other):
     why = f'<p class="note">{e(c["why_telegram"])}</p>' if c.get("why_telegram") else ""
     w = c["who"]
     return head(c, lang, other, "", c["meta"]["title"]) + f"""<div class="hero">
-<p class="kicker">{e(h["kicker"])}</p>
+{notice}<p class="kicker">{e(h["kicker"])}</p>
 <h1>{e(h["h1"])}</h1>
 <p class="lead">{e(h["lead"])}</p>
 {cta(h["cta"])}
-<p class="note">{e(h["cta_note"])}</p>{price}{why}
+{cta_note}{price}{why}
 {figure(c["illustration"])}
 </div>
 <section><h2>{e(c["problems"]["h"])}</h2><div class="grid">{problems}</div></section>
@@ -149,7 +161,7 @@ def page(lang, other):
 <section><h2>{e(c["checks"]["h"])}</h2>{groups}{checks_note}</section>
 {segments}
 <section><h2>{e(w["h"])}</h2><p>{e(w["text"])}</p><p><a href="{e(w["link_url"])}">{e(w["link_text"])}</a></p></section>
-<section><p class="status">{e(c["status"]["text"])}</p>{cta(c["status"]["cta"])}</section>
+{status}
 """ + footer(c, lang) + SCRIPT + "\n</body>\n</html>\n"
 
 
