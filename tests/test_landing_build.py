@@ -37,6 +37,13 @@ class BuildTest(unittest.TestCase):
                 self.assertNotIn("t.me/", html.split("<script")[0])
                 self.assertIn(build.html.escape(c["closed"]["note"]), html)
                 self.assertNotIn(build.html.escape(c["hero"]["cta_note"]), html)
+                self.assertNotIn(build.html.escape(c["status"]["text"]), html)
+                priced = dict(c, hero=dict(c["hero"], price_note="PRICE-NOTE-PROBE"))
+                build_load, build.load = build.load, lambda _lang, _c=priced: _c
+                try:
+                    self.assertNotIn("PRICE-NOTE-PROBE", build.page(lang, other))
+                finally:
+                    build.load = build_load
 
     def test_segment_buttons_carry_their_tag(self):
         c = build.load("ru")

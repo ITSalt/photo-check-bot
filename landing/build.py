@@ -132,7 +132,7 @@ def page(lang, other):
         cta_note = price = status = ""
         more = (f' <a href="{e(closed["link_url"])}">{e(closed["link_text"])}</a>'
                 if closed.get("link_url") and closed.get("link_text") else "")
-        notice = f'<p class="status">{e(closed["note"])}{more}</p>'
+        notice = f'<p class="status">{e(closed["note"])}{more}</p>\n'
     problems = "".join(f'<div class="card"><h3>{e(i["title"])}</h3><p>{e(i["text"])}</p></div>' for i in c["problems"]["items"])
     steps = "".join(f"<li>{e(s)}</li>" for s in c["how"]["steps"])
     groups = ""
@@ -149,8 +149,7 @@ def page(lang, other):
     why = f'<p class="note">{e(c["why_telegram"])}</p>' if c.get("why_telegram") else ""
     w = c["who"]
     return head(c, lang, other, "", c["meta"]["title"]) + f"""<div class="hero">
-{notice}
-<p class="kicker">{e(h["kicker"])}</p>
+{notice}<p class="kicker">{e(h["kicker"])}</p>
 <h1>{e(h["h1"])}</h1>
 <p class="lead">{e(h["lead"])}</p>
 {cta(h["cta"])}
