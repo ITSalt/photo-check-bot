@@ -1,8 +1,8 @@
 name: deploy
 
+# The product closed on 19.10.2026 and the bot is stopped: a push to main must not start
+# it again (compose up). Deploys run only by hand.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
