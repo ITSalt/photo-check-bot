@@ -15,7 +15,8 @@ class BuildTest(unittest.TestCase):
         for lang, other in (("ru", "en"), ("en", "ru")):
             html = build.page(lang, other)
             self.assertIn(f'<html lang="{lang}">', html)
-            self.assertIn(f"start=landing_{lang}", html)
+            if not build.load(lang).get("closed", {}).get("note"):
+                self.assertIn(f"start=landing_{lang}", html)
             # The only script is our inline ?src passthrough: no external scripts, trackers or frames.
             self.assertEqual(len(re.findall(r"<script\b", html)), 1)
             self.assertNotRegex(html, r"<script[^>]*\bsrc=|<iframe|<link[^>]*stylesheet")
@@ -23,7 +24,19 @@ class BuildTest(unittest.TestCase):
     def test_links_only_to_known_hosts(self):
         for lang, other in (("ru", "en"), ("en", "ru")):
             for url in re.findall(r'(?:href|content)="(https?://[^"]+)"', build.page(lang, other)):
-                self.assertTrue(url.startswith(("https://t.me/", "https://looktwinstudio.ru/", build.SITE + "/")), url)
+                self.assertTrue(url.startswith(("https://t.me/", "https://looktwinstudio.ru/", "https://github.com/ITSalt/",
+                                                build.SITE + "/")), url)
+
+    def test_closed_page_invites_no_check(self):
+        # 19.10.2026: the experiment is closed; the page keeps its text but offers no button to the bot.
+        for lang, other in (("ru", "en"), ("en", "ru")):
+            c = build.load(lang)
+            html = build.page(lang, other)
+            if c.get("closed", {}).get("note"):
+                self.assertNotIn('class="cta', html)
+                self.assertNotIn("t.me/", html.split("<script")[0])
+                self.assertIn(build.html.escape(c["closed"]["note"]), html)
+                self.assertNotIn(build.html.escape(c["hero"]["cta_note"]), html)
 
     def test_segment_buttons_carry_their_tag(self):
         c = build.load("ru")

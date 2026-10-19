@@ -13,7 +13,8 @@ LANDING = pathlib.Path(__file__).resolve().parent.parent / "landing"
 LANGS = ("ru", "en")
 SVG_NS = "{http://www.w3.org/2000/svg}"
 XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
-LINK_HOSTS = ("https://looktwinstudio.ru/", "https://t.me/", "https://itsalt.github.io/photo-check-bot/")
+LINK_HOSTS = ("https://looktwinstudio.ru/", "https://t.me/", "https://itsalt.github.io/photo-check-bot/",
+              "https://github.com/ITSalt/")
 
 # Maximum length in characters for every text key. A key missing here is a schema error.
 LIMITS = {
@@ -32,6 +33,7 @@ LIMITS = {
     "status.text": 220, "status.cta": 40,
     "privacy.block": 400, "privacy.page_link": 40,
     "privacy_page.title": 80, "privacy_page.sections[].h": 80, "privacy_page.sections[].p": 700,
+    "closed.note": 300, "closed.link_text": 40, "closed.link_url": 60,
 }
 # Keys that must not be empty (everything else may be "" to hide its block).
 REQUIRED = {"meta.title", "meta.desc", "header.brand", "header.lang_other", "hero.kicker", "hero.h1", "hero.lead",
@@ -42,7 +44,7 @@ REQUIRED = {"meta.title", "meta.desc", "header.brand", "header.lang_other", "her
 COUNTS = {"problems.items": (3, 4), "how.steps": (3, 4), "checks.groups": (1, 4), "checks.groups[].items": (2, 8),
           "segments.items": (0, 3), "privacy_page.sections": (0, 8)}
 # Keys that may contain a URL.
-URL_KEYS = {"who.link_url"}
+URL_KEYS = {"who.link_url", "closed.link_url"}
 
 
 def load(lang):
