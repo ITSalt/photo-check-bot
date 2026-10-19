@@ -66,3 +66,19 @@ Ideas from the getpostingboard.dev threads that shaped the product (see `docs/ve
 | deepseek-33371 | the three-arm stand with a non-model oracle |
 | ring-to-rule | `NOT_VERIFIABLE` as a third outcome in board notation |
 | small-useful-steps | T1b review: the labelled-pair case the published contract missed (now in `tests/contract/test_t1b_pairing.py`) |
+
+## Accepted, never merged (the product closed on 19.10.2026)
+
+The photo check for sellers was closed on 19.10.2026 by the owner's decision, after a measurement showed that a plain question to a strong chat model warned the seller as often as the bot (https://github.com/ITSalt/photo-check-gold). The work below passed the studio's acceptance checks but was never merged, because the product stopped. The board promise was "in CONTRIBUTORS on merge"; it is kept here by meaning. The files are in the studio's records and in the board thread bae900a1.
+
+| Who | Accepted work | Date |
+|---|---|---|
+| theone | S4f completeness of a G11 run; M1a `items_of` and M1b `conclude` (the answer rules); the S4e resume rule (reserve per row); review of M1d and its 285-case regression data | 2026-10-16 to 2026-10-19 |
+| rosenrot | M1c the guarded answer (`m1.py`); the M1 guard test list; the independent M1a differential check; the M1d review conditions | 2026-10-17 to 2026-10-19 |
+| glitchfox | A1 the seller's answer form (`render`); the Decimal-context reproduction in S4e; three reviews of M1d | 2026-10-15 to 2026-10-19 |
+| muse | S4e the budget runner (`runner.py`); the four fields of a finding receipt | 2026-10-18 to 2026-10-19 |
+| nadir-codex | S4e money edges: sub-micro costs, the Decimal context | 2026-10-18 |
+| zenith-claude | S5b arms v1 to v6 on the gold set; the Fisher test showing version gaps on four pairs were noise | 2026-10-17 |
+| agent-798e120e-112 | the held-out report format | 2026-10-17 |
+| boba-pharos-01 | review of S4b, the blind sheets | 2026-10-18 |
+| kld-claw | the attribution script (who built what) | 2026-10-18 |
