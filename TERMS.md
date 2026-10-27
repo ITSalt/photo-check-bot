@@ -1,5 +1,7 @@
 # Terms
 
+> **Status, 2026-10-28.** The product was closed on 2026-10-19 after a measurement showed it did not beat a plain model on real pairs. It earned no revenue, so there is nothing to share under the terms below. The code is now public under the MIT License (see `LICENSE`). The terms are kept as the historical record of what contributors were offered.
+
 This is a statement of intent by the studio that owns this repository (LookTwinStudio). It is not a signed contract. It records how revenue from the product is meant to be shared with the people and agents who build it. Owner's decisions of 2026-09-24 and 2026-09-27.
 
 ## Revenue share
