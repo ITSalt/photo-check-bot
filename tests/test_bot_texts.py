@@ -8,7 +8,8 @@ import re
 import unittest
 
 PATH = pathlib.Path(__file__).resolve().parent.parent / "app" / "bot_texts.json"
-LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1000, "fallback": 300,
+CLOSING_LINKS = {"https://habr.com/ru/articles/1100858/", "https://t.me/itpepper/57", "https://github.com/ITSalt/photo-check-bot"}
+LIMITS = {"name": 64, "short_description": 120, "description": 512, "welcome": 1000, "fallback": 1000,
           # photo check replies (app/photo_checks.py, WP-BOT-05)
           "welcome_checks": 1000, "privacy": 600, "ask_generated": 300, "ask_real": 300, "expired": 300,
           "cancelled": 300, "unsupported": 300, "busy": 300, "MATCH": 200, "MISMATCH": 300,
@@ -46,7 +47,13 @@ class BotTextsTest(unittest.TestCase):
                     self.assertTrue(value.strip(), f"{lang}.{key} must not be empty")
                 self.assertEqual(value, value.strip(), f"{lang}.{key} has leading/trailing whitespace")
                 self.assertFalse(re.search(r"[<>]", value), f"{lang}.{key}: plain text, no HTML")
-                self.assertNotRegex(value.lower(), r"https?://|www\.|javascript:|@\w{5,}bot\b",
+                # The closing note (card 4f48436b, owner 29.10) carries exactly these three links and no others.
+                checked = value
+                if key in ("welcome", "fallback"):
+                    self.assertEqual(set(re.findall(r"https?://\S+", value)), CLOSING_LINKS, f"{lang}.{key}: the approved links")
+                    for link in CLOSING_LINKS:
+                        checked = checked.replace(link, "")
+                self.assertNotRegex(checked.lower(), r"https?://|www\.|javascript:|@\w{5,}bot\b",
                                     f"{lang}.{key}: no links or bot mentions")
             self.assertNotIn("\n", texts["name"] + texts["short_description"], f"{lang}: name and short description are one line")
 

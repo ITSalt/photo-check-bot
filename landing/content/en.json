@@ -65,7 +65,7 @@
     "cta": "Check for free in Telegram"
   },
   "privacy": {
-    "block": "The bot was stopped on 19.10.2026. The waitlist and the check counter were deleted the same day, without a backup. Only anonymised check codes not linked to you remain on the server. While the bot ran, our server deleted the photos when a check ended.",
+    "block": "The bot stopped checking photos on 19.10.2026. It now answers only with a short story of the project and links, and keeps no data about its users. The waitlist and the check counter were deleted on 19.10.2026, without a backup. Only anonymised check codes not linked to you remain on the server. While the bot checked photos, our server deleted them when a check ended.",
     "page_link": ""
   },
   "privacy_page": {

@@ -36,6 +36,7 @@ class ForgetTests(WiringBase):
                 checks = self.build(FakeCompare(self, {"status": "MATCH"}))
                 for user in (USER, OTHER):
                     self.run_updates(checks, update(user, lang, text="/start campaign_x"))
+                    waitlist.record(user, "/start campaign_x")   # a row left from before 29.10: /start no longer writes one
                     self.pair(checks, lang, user=user)
                 key = checks.gate.counter.key(USER)
                 self.assertEqual(len(self.counter_rows()), 2)
@@ -111,6 +112,7 @@ class ForgetTests(WiringBase):
     def test_text_only_starting_with_forget_is_not_forget(self):
         checks = self.build(FakeCompare(self, {"status": "MATCH"}))
         self.run_updates(checks, update(text="/start"))
+        waitlist.record(USER, "/start")   # a row left from before 29.10
         self.pair(checks)
         for photo_checks in (None, checks):
             for text in ("/forgetful", "/forget_me", "/forgets now", "forget", " /forgetx"):
@@ -139,6 +141,7 @@ class ForgetTests(WiringBase):
                 with self.counter_env(salt=None):
                     os.environ.pop("CHECK_COUNTER_SALT", None)
                     self.run_updates(None, update(USER, lang, text="/start"), update(OTHER, lang, text="/start"))
+                    waitlist.record(USER, "/start"); waitlist.record(OTHER, "/start")   # rows left from before 29.10
                 sent = self.run_updates(None, update(USER, lang, text="/forget"), update(USER, lang, text="/forget"))
                 self.assertEqual(sent, [self.bot.TEXTS[lang]["forget_done"]] * 2)
                 self.assertEqual(set(self.waitlist_users()), {str(OTHER)})
@@ -178,11 +181,27 @@ class ForgetTests(WiringBase):
         for photo_checks, expected in ((None, [self.bot.TEXTS["ru"]["welcome"]]),
                                        (checks, [self.bot.TEXTS["ru"]["welcome_checks"], self.bot.TEXTS["ru"]["privacy"],
                                                  self.bot.TEXTS["ru"]["ask_generated"]])):
-            with self.subTest(vision=photo_checks is not None), self.assertLogs("waitlist", "ERROR") as logs:
-                sent = self.run_updates(photo_checks, update(text="/start campaign_x"))
+            with self.subTest(vision=photo_checks is not None), self.assertNoLogs("waitlist", "ERROR"):
+                sent = self.run_updates(photo_checks, update(text="/start campaign_x"))   # /start does not read the waitlist
                 self.assertEqual(sent, expected)
-                self.assertEqual(logs.output, ["ERROR:waitlist:waitlist_error code=CORRUPT"])
         self.assertEqual(pathlib.Path(self.waitlist_path).read_bytes(), content)
+
+    def test_start_writes_no_telegram_id(self):
+        # 29.10 (card 4f48436b): the closed bot keeps no data about its users; /start must not add a waitlist row.
+        checks = self.build(FakeCompare(self, {"status": "MATCH"}))
+        for photo_checks in (None, checks):
+            with self.subTest(vision=photo_checks is not None, file="absent"):
+                if os.path.exists(self.waitlist_path):
+                    os.unlink(self.waitlist_path)
+                self.run_updates(photo_checks, update(USER, text="/start"), update(OTHER, text="/start landing_ru"))
+                self.assertFalse(os.path.exists(self.waitlist_path))
+            with self.subTest(vision=photo_checks is not None, file="present"):
+                os.makedirs(os.path.dirname(self.waitlist_path), exist_ok=True)
+                pathlib.Path(self.waitlist_path).write_text(json.dumps({"users": {}}))
+                before = pathlib.Path(self.waitlist_path).read_bytes()
+                self.run_updates(photo_checks, update(USER, text="/start"), update(OTHER, text="/start tg_ads_1"))
+                self.assertEqual(pathlib.Path(self.waitlist_path).read_bytes(), before)
+                self.assertEqual(self.waitlist_users(), {})
 
     def test_main_migrates_at_startup_and_purges_from_the_loop(self):
         os.makedirs(os.path.dirname(self.waitlist_path), exist_ok=True)
