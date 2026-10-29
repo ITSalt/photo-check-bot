@@ -2,7 +2,8 @@
 
 `python -m app.bot` turns the photo check on only when app/vision_wiring.py finds
 everything configured (VISION_*, CHECK_COUNTER_SALT, counter and spend cap);
-otherwise the bot replies exactly as before (welcome, waitlist, fallback).
+otherwise the bot answers every message with the closing note (welcome = fallback, app/bot_texts.json).
+/start no longer adds anyone to the waitlist (product closed 19.10.2026).
 /forget works either way: it deletes the user's waitlist row and their free-check counter
 row (app/waitlist.py, app/check_counter.py; with the photo check off, through a standalone
 counter when CHECK_COUNTER_SALT is valid and the counter file exists). The waitlist is
@@ -231,11 +232,8 @@ def handle(update, *, photo_checks=None):
         call("sendMessage", {"chat_id": chat, "text": texts["forget_done" if done else "forget_failed"]})
         return
     if (msg.get("text") or "").startswith("/start"):
-        user = (msg.get("from") or {}).get("id")
-        if user is not None:
-            source, is_new = waitlist.record(user, msg.get("text"))
-            if is_new:
-                log.info("new user from source=%s totals=%s", source, waitlist.counts())
+        # The product closed on 19.10.2026: /start no longer writes the Telegram id anywhere (no waitlist row).
+        # The waitlist module stays only to clean up (startup, daily purge) and for /forget.
         if photo_checks is None:
             send_reply(chat, lang_markup(texts["welcome"]))
             return

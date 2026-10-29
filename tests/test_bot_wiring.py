@@ -27,12 +27,13 @@ D11_EN = "This check was not counted: the bot is not sure — look at the marked
 DETAIL = {"status": "NEEDS_REVIEW", "total": 12, "confirmed": [{"label": "x"}] * 9,
           "to_check": [{"label": "застёжка", "reason": "not_visible"}], "differs": [], "extra": "none"}
 
-# Replies of the bot on main (392a8f7) with the feature off, copied verbatim.
+# Replies of the closed bot (card 4f48436b, owner "да" 29.10) with the feature off, copied verbatim:
+# every message gets the same closing note.
 MAIN_TEXTS = {
-    "ru": {"welcome": "Привет! Я проверяю ИИ-фото товара перед публикацией на маркетплейсе.\nСкоро здесь можно будет прислать сгенерированное фото и фото настоящей вещи, а я скажу, что исказилось и как это исправить.\n\nПрисланные фото удаляются сразу после проверки.",
-           "fallback": "Проверка фото пока в разработке. Напишите /start."},
-    "en": {"welcome": "Hi! I check AI product photos before they go live on a marketplace.\nSoon you'll be able to send a generated photo and a photo of the real item here, and I'll tell you what changed and how to fix it.\n\nPhotos you send are deleted right after the check.",
-           "fallback": "Photo checks are still in development. Send /start."},
+    "ru": {"welcome": "Этот бот был экспериментом. Его строили ИИ-агенты с открытой доски getpostingboard.dev: бот сравнивал сгенерированное фото товара с фото настоящей вещи и говорил продавцу, можно ли публиковать. 19.10.2026 мы его закрыли: на наших тестовых парах обычный вопрос к сильной модели справлялся не хуже. Код и вся история разработки открыты. Бот больше не проверяет фото и ничего о вас не хранит.\n\nСтатья: https://habr.com/ru/articles/1100858/\nКанал ITPepper: https://t.me/itpepper/57\nКод: https://github.com/ITSalt/photo-check-bot",
+           "fallback": "Этот бот был экспериментом. Его строили ИИ-агенты с открытой доски getpostingboard.dev: бот сравнивал сгенерированное фото товара с фото настоящей вещи и говорил продавцу, можно ли публиковать. 19.10.2026 мы его закрыли: на наших тестовых парах обычный вопрос к сильной модели справлялся не хуже. Код и вся история разработки открыты. Бот больше не проверяет фото и ничего о вас не хранит.\n\nСтатья: https://habr.com/ru/articles/1100858/\nКанал ITPepper: https://t.me/itpepper/57\nКод: https://github.com/ITSalt/photo-check-bot"},
+    "en": {"welcome": "This bot was an experiment. AI agents from the open board getpostingboard.dev built it: it compared a generated product photo with a photo of the real item and told the seller whether to publish. We closed it on 19.10.2026: on our test pairs, a plain question to a strong model did just as well. The code and the whole build history are open. The bot no longer checks photos and stores nothing about you.\n\nArticle (in Russian): https://habr.com/ru/articles/1100858/\nITPepper channel: https://t.me/itpepper/57\nCode: https://github.com/ITSalt/photo-check-bot",
+           "fallback": "This bot was an experiment. AI agents from the open board getpostingboard.dev built it: it compared a generated product photo with a photo of the real item and told the seller whether to publish. We closed it on 19.10.2026: on our test pairs, a plain question to a strong model did just as well. The code and the whole build history are open. The bot no longer checks photos and stores nothing about you.\n\nArticle (in Russian): https://habr.com/ru/articles/1100858/\nITPepper channel: https://t.me/itpepper/57\nCode: https://github.com/ITSalt/photo-check-bot"},
 }
 
 
